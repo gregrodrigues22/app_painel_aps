@@ -425,11 +425,9 @@ def tau_trimestral_acumulado_por_dia(
         return fig
 
     # --------- colunas realmente existentes ---------
-    dc = date_col if date_col in df.columns else (
-        "_dt" if "_dt" in df.columns else
-        "mes_atendimento" if "mes_atendimento" in df.columns else
-        "data" if "data" in df.columns else None
-    )
+    possiveis = [date_col, "data", "_dt", "mes_atendimento"]
+    dc = next((c for c in possiveis if c in df.columns), None)
+
     if dc is None:
         raise KeyError("Coluna de data não encontrada (tente _dt, mes_atendimento ou data).")
 
@@ -546,10 +544,11 @@ def tau_trimestral_acumulado_por_dia(
         x_max = df_tau["date"].iloc[imax]
         y_max = df_tau["tau"].iloc[imax]
         fig.add_annotation(
-            x=x_max, y=y_max,
+            x=x_max,
+            y=min(y_max - 0.05, 0.95),   # move o texto para baixo e evita passar de 95%
             text=qlbl,
             showarrow=False,
-            yshift=14,
+            yshift=0,
             font=dict(size=11, color="#555"),
             bgcolor="rgba(255,255,255,0.6)",
             align="center",
@@ -574,6 +573,351 @@ def tau_trimestral_acumulado_por_dia(
         margin=dict(l=40, r=10, t=60, b=40),
         showlegend=False,  # << remove legenda
     )
+    return fig
+
+def tau_distribuicao_mensal_por_trimestre(
+    df: pd.DataFrame,
+    *,
+    date_col: str,                 # "data" | "mes_atendimento" | "_dt"
+    id_col: str = "id_pessoa",
+    tipo_col: str = "tipo",
+    inter_tipos: set | None = None,
+    title: str = "Distribuição do engajamento dentro do trimestre",
+) -> go.Figure:
+
+    if df.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Sem dados", template="plotly_white", height=320)
+        return fig
+
+    # --------- coluna de data (prioriza diário) ---------
+    possiveis = [date_col, "data", "_dt", "mes_atendimento"]
+    dc = next((c for c in possiveis if c in df.columns), None)
+
+    if dc is None:
+        raise KeyError(
+            f"Coluna de data não encontrada. Recebi date_col='{date_col}'."
+        )
+
+    if id_col not in df.columns:
+        raise KeyError(f"Coluna de id '{id_col}' não encontrada.")
+
+    # --------- coluna de tipo ---------
+    tc = tipo_col
+    if tc not in df.columns:
+        for cand in ["tipo_interacao", "interaction_type", "evento", "tipo"]:
+            if cand in df.columns:
+                tc = cand
+                break
+        else:
+            raise KeyError(
+                f"Coluna de tipo '{tipo_col}' não encontrada e nenhum alias comum foi achado."
+            )
+
+    d = df[[dc, id_col, tc]].copy()
+
+    # --------- normalização mínima ---------
+    d[dc] = pd.to_datetime(d[dc], errors="coerce")
+    d = d.dropna(subset=[dc])
+    d["_date"] = d[dc].dt.normalize()
+    d["_quarter"] = d["_date"].dt.to_period("Q")
+
+    # --------- tipos de interação que contam como engajamento ---------
+    if not inter_tipos:
+        inter_tipos = {
+            "mensagem", "mensagens", "msg", "whatsapp",
+            "ligacao", "ligacoes", "chamada",
+            "atendimento", "consulta"
+        }
+
+    def _norm(s):
+        s = str(s).strip().lower()
+        s = "".join(
+            ch for ch in unicodedata.normalize("NFD", s)
+            if unicodedata.category(ch) != "Mn"
+        )
+        return s
+
+    d["_tipo_norm"] = d[tc].map(_norm)
+
+    # --------- primeira interação no trimestre ---------
+    d_inter = d[d["_tipo_norm"].isin(inter_tipos)]
+    if d_inter.empty:
+        fig = go.Figure()
+        fig.update_layout(
+            title="Sem dados de engajamento (nenhuma interação nos tipos especificados).",
+            template="plotly_white",
+            height=320,
+        )
+        return fig
+
+    first_inter = (
+        d_inter.groupby(["_quarter", id_col])["_date"]
+        .min()
+        .reset_index(name="first_day")
+    )
+
+    # --------- mês dentro do trimestre (1º, 2º, 3º) ---------
+    # mês de início do trimestre (Jan/Apr/Jul/Oct etc.)
+    first_inter["_q_start_month"] = first_inter["_quarter"].dt.start_time.dt.month
+    first_inter["_month_in_quarter"] = (
+        first_inter["first_day"].dt.month - first_inter["_q_start_month"] + 1
+    )
+
+    # garante apenas valores 1, 2 ou 3
+    first_inter = first_inter[
+        first_inter["_month_in_quarter"].isin([1, 2, 3])
+    ].copy()
+
+    # --------- contagem e proporção por trimestre x mês ---------
+    dist = (
+        first_inter
+        .groupby(["_quarter", "_month_in_quarter"])[id_col]
+        .nunique()
+        .reset_index(name="engajados")
+    )
+
+    if dist.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Sem engajados por trimestre.", template="plotly_white", height=320)
+        return fig
+
+    # garante que todos os meses (1,2,3) existam para cada trimestre
+    quarters = dist["_quarter"].unique()
+    idx = pd.MultiIndex.from_product(
+        [quarters, [1, 2, 3]],
+        names=["_quarter", "_month_in_quarter"],
+    )
+
+    dist = (
+        dist.set_index(["_quarter", "_month_in_quarter"])
+            .reindex(idx, fill_value=0)
+            .reset_index()
+    )
+
+    # proporção dentro do trimestre
+    dist["total_q"] = dist.groupby("_quarter")["engajados"].transform("sum")
+    # se por algum bug tiver trimestre com total 0, evita divisão por zero
+    dist = dist[dist["total_q"] > 0].copy()
+    dist["prop"] = dist["engajados"] / dist["total_q"]
+
+    # labels bonitinhos
+    dist["_quarter_str"] = dist["_quarter"].astype(str)
+    month_labels = {1: "1º mês", 2: "2º mês", 3: "3º mês"}
+    dist["month_label"] = dist["_month_in_quarter"].map(month_labels)
+
+    # --------- pivot para heatmap ---------
+    heat = (
+        dist
+        .pivot(index="month_label", columns="_quarter_str", values="prop")
+        .sort_index()  # mantém 1º, 2º, 3º mês na ordem
+    )
+
+    # texto com porcentagem
+    text_vals = heat.applymap(lambda v: f"{v:.0%}" if pd.notna(v) else "")
+
+    fig = go.Figure(
+        data=go.Heatmap(
+            z=heat.values,
+            x=list(heat.columns),
+            y=list(heat.index),
+            zmin=0,
+            zmax=1,
+            colorscale="Blues",
+            colorbar=dict(title="Proporção do engajamento", tickformat=".0%"),
+            text=text_vals.values,
+            texttemplate="%{text}",
+            textfont=dict(size=11),
+        )
+    )
+
+    fig.update_layout(
+        title=title,
+        template="plotly_white",
+        xaxis_title="Trimestre",
+        yaxis_title="Mês dentro do trimestre",
+        margin=dict(l=60, r=20, t=60, b=60),
+    )
+
+    return fig
+    
+def tau_distribuicao_mensal_por_trimestre_barras(
+    df: pd.DataFrame,
+    *,
+    date_col: str,                 # "data" | "mes_atendimento" | "_dt"
+    id_col: str = "id_pessoa",
+    tipo_col: str = "tipo",
+    inter_tipos: set | None = None,
+    title: str = "Distribuição do engajamento por mês do trimestre",
+) -> go.Figure:
+
+    if df.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Sem dados", template="plotly_white", height=320)
+        return fig
+
+    # --------- coluna de data (prioriza diário) ---------
+    possiveis = [date_col, "data", "_dt", "mes_atendimento"]
+    dc = next((c for c in possiveis if c in df.columns), None)
+
+    if dc is None:
+        raise KeyError(
+            f"Coluna de data não encontrada. Recebi date_col='{date_col}'."
+        )
+
+    if id_col not in df.columns:
+        raise KeyError(f"Coluna de id '{id_col}' não encontrada.")
+
+    # --------- coluna de tipo ---------
+    tc = tipo_col
+    if tc not in df.columns:
+        for cand in ["tipo_interacao", "interaction_type", "evento", "tipo"]:
+            if cand in df.columns:
+                tc = cand
+                break
+        else:
+            raise KeyError(
+                f"Coluna de tipo '{tipo_col}' não encontrada e nenhum alias comum foi achado."
+            )
+
+    d = df[[dc, id_col, tc]].copy()
+
+    # --------- normalização mínima ---------
+    d[dc] = pd.to_datetime(d[dc], errors="coerce")
+    d = d.dropna(subset=[dc])
+    d["_date"] = d[dc].dt.normalize()
+    d["_quarter"] = d["_date"].dt.to_period("Q")
+
+    # --------- tipos de interação que contam como engajamento ---------
+    if not inter_tipos:
+        inter_tipos = {
+            "mensagem", "mensagens", "msg", "whatsapp",
+            "ligacao", "ligacoes", "chamada",
+            "atendimento", "consulta"
+        }
+
+    import unicodedata
+    def _norm(s):
+        s = str(s).strip().lower()
+        s = "".join(
+            ch for ch in unicodedata.normalize("NFD", s)
+            if unicodedata.category(ch) != "Mn"
+        )
+        return s
+
+    d["_tipo_norm"] = d[tc].map(_norm)
+
+    # --------- primeira interação no trimestre ---------
+    d_inter = d[d["_tipo_norm"].isin(inter_tipos)]
+    if d_inter.empty:
+        fig = go.Figure()
+        fig.update_layout(
+            title="Sem dados de engajamento (nenhuma interação nos tipos especificados).",
+            template="plotly_white",
+            height=320,
+        )
+        return fig
+
+    first_inter = (
+        d_inter.groupby(["_quarter", id_col])["_date"]
+        .min()
+        .reset_index(name="first_day")
+    )
+
+    # --------- mês dentro do trimestre (1º, 2º, 3º) ---------
+    first_inter["_q_start_month"] = first_inter["_quarter"].dt.start_time.dt.month
+    first_inter["_month_in_quarter"] = (
+        first_inter["first_day"].dt.month - first_inter["_q_start_month"] + 1
+    )
+
+    # garante apenas valores 1, 2 ou 3
+    first_inter = first_inter[
+        first_inter["_month_in_quarter"].isin([1, 2, 3])
+    ].copy()
+
+    # --------- contagem e proporção por trimestre x mês ---------
+    dist = (
+        first_inter
+        .groupby(["_quarter", "_month_in_quarter"])[id_col]
+        .nunique()
+        .reset_index(name="engajados")
+    )
+
+    if dist.empty:
+        fig = go.Figure()
+        fig.update_layout(title="Sem engajados por trimestre.", template="plotly_white", height=320)
+        return fig
+
+    # garante todos os meses (1,2,3) para cada trimestre
+    quarters = sorted(dist["_quarter"].unique())
+    idx = pd.MultiIndex.from_product(
+        [quarters, [1, 2, 3]],
+        names=["_quarter", "_month_in_quarter"],
+    )
+
+    dist = (
+        dist.set_index(["_quarter", "_month_in_quarter"])
+            .reindex(idx, fill_value=0)
+            .reset_index()
+    )
+
+    # proporção dentro do trimestre
+    dist["total_q"] = dist.groupby("_quarter")["engajados"].transform("sum")
+    dist = dist[dist["total_q"] > 0].copy()
+    dist["prop"] = dist["engajados"] / dist["total_q"]
+
+    # labels
+    month_labels = {1: "1º mês", 2: "2º mês", 3: "3º mês"}
+    quarter_labels = [str(q) for q in quarters]
+
+    # cores harmônicas (degradê de azul)
+    color_map = {
+        1: "#1E88E5",  # 1º mês - azul mais forte
+        2: "#64B5F6",  # 2º mês - azul médio
+        3: "#BBDEFB",  # 3º mês - azul claro
+    }
+
+    # --------- figura de barras empilhadas ---------
+    fig = go.Figure()
+    for m in [1, 2, 3]:
+        sub = (
+            dist[dist["_month_in_quarter"] == m]
+            .set_index("_quarter")
+            .reindex(quarters, fill_value=0)
+        )
+
+        # rótulos: só mostra se tiver pelo menos 8%
+        labels = [
+            f"{p:.0%}" if p >= 0.08 else ""
+            for p in sub["prop"].values
+        ]
+
+        fig.add_bar(
+            x=quarter_labels,
+            y=sub["prop"].values,
+            name=month_labels[m],
+            marker_color=color_map[m],
+            text=labels,
+            textposition="inside",
+            textfont=dict(color="white", size=11),
+            hovertemplate=(
+                "Trimestre: %{x}<br>"
+                f"Mês: {month_labels[m]}<br>"
+                "Percentual do engajamento: %{y:.0%}<extra></extra>"
+            ),
+        )
+
+    fig.update_layout(
+        title=title,
+        barmode="stack",
+        template="plotly_white",
+        xaxis_title="Trimestre",
+        yaxis_title="Proporção do engajamento no trimestre",
+        yaxis=dict(tickformat=".0%"),
+        legend_title_text="Mês dentro do trimestre",
+        margin=dict(l=60, r=20, t=60, b=60),
+    )
+
     return fig
 
 def heatmap_combos_por_trimestre_colscale(
@@ -736,7 +1080,7 @@ def heatmap_combos_por_trimestre_colscale(
 def meta_trimestral_acumulada(
     df: pd.DataFrame,
     *,
-    date_col: str,                 # coluna de datas (diárias)
+    date_col: str,                 # coluna de datas (diárias se possível)
     id_col: str = "id_pessoa",     # identificador da pessoa
     tipo_col: str = "tipo",        # coluna do tipo de interação
     inter_tipos: Optional[set] = None,   # quais tipos contam como "engajamento"
@@ -746,21 +1090,30 @@ def meta_trimestral_acumulada(
     line_real="#1976d2",
     line_meta="#1b5e20",
     title="04 - TAU Realizado Acumulado e 09 - Meta Rateada por Dia Acumulada por date",
-    return_kpis: bool = False      # <<< NOVO: se True, retorna (fig, kpis)
+    return_kpis: bool = False      # se True, retorna (fig, kpis)
 ):
     import unicodedata, re
+
     if inter_tipos is None:
         inter_tipos = {
             "mensagem","mensagens","ligacao","ligações","ligacoes",
             "atendimento","consulta","whatsapp","msg","chamada"
         }
 
+    # ---------- escolha da coluna de data (mesma lógica do TAU) ----------
+    possiveis = [date_col, "data", "_dt", "mes_atendimento"]
+    dc = next((c for c in possiveis if c in df.columns), None)
+    if dc is None:
+        raise KeyError(
+            f"Nenhuma coluna de data encontrada. Recebi date_col='{date_col}'."
+        )
+
     # --- datas e quarter ---
     df = df.copy()
-    df[date_col] = pd.to_datetime(df[date_col], errors="coerce")
-    df = df.dropna(subset=[date_col])
+    df[dc] = pd.to_datetime(df[dc], errors="coerce")
+    df = df.dropna(subset=[dc])
 
-    df["_quarter"] = df[date_col].dt.to_period("Q")
+    df["_quarter"] = df[dc].dt.to_period("Q")
     df["_quarter_lbl"] = df["_quarter"].astype(str)  # "YYYYQ1..4"
 
     # aceita 'YYYYQ01..04' e 'YYYYQ1..4'
@@ -768,7 +1121,11 @@ def meta_trimestral_acumulada(
 
     if quarter_label_norm not in set(df["_quarter_lbl"]):
         fig = go.Figure()
-        fig.update_layout(title=f"Sem dados para {quarter_label}", template="plotly_white", height=340)
+        fig.update_layout(
+            title=f"Sem dados para {quarter_label}",
+            template="plotly_white",
+            height=340
+        )
         return (fig, {}) if return_kpis else fig
 
     # fatia o trimestre
@@ -783,22 +1140,29 @@ def meta_trimestral_acumulada(
     denom = int(q_df[id_col].nunique())
     if denom <= 0:
         fig = go.Figure()
-        fig.update_layout(title="Sem denominador (ativos) no trimestre selecionado",
-                          template="plotly_white", height=340)
+        fig.update_layout(
+            title="Sem denominador (ativos) no trimestre selecionado",
+            template="plotly_white",
+            height=340
+        )
         return (fig, {}) if return_kpis else fig
 
     # --- primeiro dia com interação por pessoa (dentro do tri) ---
     def _norm(s):
         s = str(s).strip().lower()
-        s = "".join(ch for ch in unicodedata.normalize("NFD", s) if unicodedata.category(ch)!="Mn")
+        s = "".join(
+            ch for ch in unicodedata.normalize("NFD", s)
+            if unicodedata.category(ch) != "Mn"
+        )
         return s
+
     if tipo_col in q_df.columns:
         q_df["_tipo_norm"] = q_df[tipo_col].map(_norm)
     else:
         q_df["_tipo_norm"] = ""
 
     eng = q_df[q_df["_tipo_norm"].isin(inter_tipos)].copy()
-    eng["_date"] = eng[date_col].dt.normalize()
+    eng["_date"] = eng[dc].dt.normalize()
 
     first_inter = (
         eng.groupby(id_col)["_date"]
@@ -828,15 +1192,6 @@ def meta_trimestral_acumulada(
         idx = pd.date_range(start, end, freq="D")
         mask = (idx.weekday < 5) & (~idx.isin(fer_set))
         return idx[mask]
-
-    dias_uteis = _dias_uteis(q_start, q_end, feriados)
-    if len(dias_uteis) == 0:
-        dias_uteis = idx
-
-    meta_dia = meta_tau / len(dias_uteis)
-    meta_cum = pd.Series(0.0, index=idx)
-    meta_cum.loc[dias_uteis] = meta_dia
-    meta_cum = meta_cum.cumsum().clip(upper=meta_tau)
 
     dias_uteis = _dias_uteis(q_start, q_end, feriados)
     if len(dias_uteis) == 0:
@@ -905,7 +1260,6 @@ def meta_trimestral_acumulada(
         fill=None
     )
 
-    # anotações compactas
     fig.add_annotation(
         x=out["date"].iloc[-1], y=realizado_final,
         xanchor="right", yanchor="bottom",
@@ -919,13 +1273,22 @@ def meta_trimestral_acumulada(
         showarrow=False, font=dict(color=line_meta)
     )
 
-    fig.update_yaxes(range=[0, 1], tickformat=".0%", title="04 - TAU Realizado Acumulado e 09 - Meta")
+    fig.update_yaxes(
+        range=[0, 1],
+        tickformat=".0%",
+        title="04 - TAU Realizado Acumulado e 09 - Meta"
+    )
     fig.update_xaxes(title="date", showgrid=True)
     fig.update_layout(
-        title=title + f" — {quarter_label_norm}  |  Ativos: {denom:,}  |  Meta alvo: {meta_tau:.0%}  |  Restante p/ meta: {restante_meta:.1%}",
-        template="plotly_white", hovermode="x unified", height=420,
+        title=(
+            title
+            + f" — {quarter_label_norm}  |  Ativos: {denom:,}  |  Meta alvo: {meta_tau:.0%}  |  Restante p/ meta: {restante_meta:.1%}"
+        ),
+        template="plotly_white",
+        hovermode="x unified",
+        height=420,
         margin=dict(l=40, r=10, t=70, b=40),
-        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0)
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="left", x=0),
     )
 
     kpis = {
@@ -940,3 +1303,513 @@ def meta_trimestral_acumulada(
     }
 
     return (fig, kpis) if return_kpis else fig
+
+
+# ------------------------------------------------------------
+# Gráfico Setor
+# ------------------------------------------------------------
+def pie_standard(
+    df: pd.DataFrame,
+    names: str,                # coluna categórica
+    values: str,               # coluna numérica
+    title: str = "",
+    hole: float = 0.35,        # 0 = pizza, 0.35 = donut
+    sort: str = "desc",        # 'desc', 'asc', 'none'
+    top_n: int | None = None,  # agrega além dos top_n em "Outros"
+    others_label: str = "Outros",
+    none_label: str = "(não informado)",
+    show_legend: bool = True,
+    legend_pos: str = "below_title",  # 'below_title' | 'right' | 'bottom'
+    percent_digits: int = 1,
+    number_digits: int = 0,
+    thousands_sep: str = ".",
+    min_pct_inside: float = 6,
+    color_discrete_map: dict | None = None,
+):
+    import re
+    import plotly.express as px
+
+    if (
+        df is None or df.empty
+        or names not in df.columns
+        or values not in df.columns
+    ):
+        return px.pie(
+            pd.DataFrame({names: [], values: []}),
+            names=names, values=values, title=title, hole=hole
+        )
+
+    d = df[[names, values]].copy()
+    d[names] = d[names].fillna(none_label).astype(str)
+    d[values] = pd.to_numeric(d[values], errors="coerce").fillna(0)
+    d = d.groupby(names, as_index=False)[values].sum()
+
+    if top_n is not None and top_n > 0 and len(d) > top_n:
+        d = d.sort_values(values, ascending=False)
+        top = d.head(top_n)
+        tail = d.iloc[top_n:]
+        outros_val = tail[values].sum()
+        if outros_val > 0:
+            d = pd.concat(
+                [top, pd.DataFrame({names: [others_label], values: [outros_val]})],
+                ignore_index=True
+            )
+
+    if sort == "desc":
+        d = d.sort_values(values, ascending=False)
+    elif sort == "asc":
+        d = d.sort_values(values, ascending=True)
+
+    total = d[values].sum()
+    if total == 0:
+        return px.pie(
+            pd.DataFrame({names: [], values: []}),
+            names=names, values=values, title=title, hole=hole
+        )
+
+    d["pct"] = (d[values] / total * 100)
+
+    def fmt_num(x: float) -> str:
+        s = f"{x:,.{number_digits}f}"
+        return s.replace(",", "X").replace(".", thousands_sep).replace("X", ",")
+
+    d["label_inside"] = d.apply(
+        lambda r: f"{r['pct']:.{percent_digits}f}%\n{fmt_num(r[values])}",
+        axis=1
+    )
+
+    textpos = ["inside" if p >= min_pct_inside else "outside" for p in d["pct"]]
+    pull = [0.0 if p >= min_pct_inside else 0.03 for p in d["pct"]]
+
+    fig = px.pie(
+        d,
+        names=names,
+        values=values,
+        title=title,
+        hole=hole,
+        color=names,
+        color_discrete_map=color_discrete_map,
+    )
+
+    val_fmt = f",.{number_digits}f"
+    pct_fmt = f".{percent_digits}%"
+
+    fig.update_traces(
+        text=d["label_inside"],
+        textposition=textpos,
+        textinfo="none",
+        texttemplate="%{text}",
+        pull=pull,
+        hovertemplate=(
+            "<b>%{label}</b><br>"
+            f"Quantidade: %{{value:{val_fmt}}}<br>"
+            f"Participação: %{{percent:{pct_fmt}}}"
+            "<extra></extra>"
+        ),
+        textfont=dict(size=12),
+        sort=False,
+    )
+
+    # --- legenda logo abaixo do título ---
+    if legend_pos == "below_title":
+        legend_cfg = dict(
+            orientation="h",
+            yanchor="top",
+            y=1.0,              # ligeiramente abaixo do título
+            xanchor="right",
+            x=0.0,
+            valign="top"
+        )
+        title_pad = 90          # aumenta o espaço para o título + legenda
+    elif legend_pos == "bottom":
+        legend_cfg = dict(
+            orientation="h",
+            yanchor="top",
+            y=-0.15,
+            xanchor="center",
+            x=0.5
+        )
+        title_pad = 60
+    else:
+        legend_cfg = dict(
+            orientation="v",
+            yanchor="top",
+            y=1,
+            xanchor="left",
+            x=1.02
+        )
+        title_pad = 60
+
+    fig.update_layout(
+        showlegend=show_legend,
+        legend=legend_cfg,
+        margin=dict(l=10, r=10, t=title_pad, b=10),
+        uniformtext_minsize=10,
+        uniformtext_mode="show",
+        template="plotly_white",
+        paper_bgcolor="white",
+        plot_bgcolor="#f7f9fb",
+    )
+
+    return fig
+
+
+# ------------------------------------------------------------
+# Gráfico Histograma e Boxplot
+# ------------------------------------------------------------
+
+def histograma_boxplot_idade_plotly(
+    df,
+    # ===== PARÂMETROS ESSENCIAIS (dados) =====
+    col_numerica="col_numerica",        # coluna numérica
+    nbins=20,                            # número de "caixas" (bins) do histograma
+
+    # ===== PARÂMETROS ESSENCIAIS (apresentação — SEMPRE PRESENTES) =====
+    largura_px=1200,                     # largura da figura (px)
+    altura_px=800,                       # altura  da figura (px)
+    margem=dict(l=300, r=140, t=100, b=60),  # margens externas: espaço p/ rótulos/anotações
+
+    # ===== PARÂMETROS ESSENCIAIS (título/saída) =====
+    titulo="Distribuição de Idades dos Alunos",
+):
+    """
+    Histograma + Curva Normal + Boxplot (subplots)
+    Linha 1 (75%): histograma + curva Normal + média/mediana.
+    Linha 2 (25%): boxplot horizontal compartilhando o eixo X.
+    """
+
+    # ======================================================================
+    # (0) IMPORTS, CORES E SETUP
+    # ======================================================================
+    import numpy as np
+    import pandas as pd
+    from scipy import stats
+    import plotly.graph_objects as go
+    from plotly.subplots import make_subplots
+
+    # Paleta
+    cor_histograma = "rgb(19, 93, 171)"
+    cor_box        = "rgba(19, 93, 171, 0.6)"
+    cor_outlier    = "rgba(19, 93, 171, 1.0)"
+    cor_borda      = "white"
+    cor_media      = "black"
+    cor_mediana    = "green"
+    cor_normal     = "red"
+    cor_fence      = "rgba(0,0,0,0.35)"
+    grid_color     = "rgba(0,0,0,0.08)"
+
+    # ======================================================================
+    # (1) PREPARO DA SÉRIE
+    # ======================================================================
+    if col_numerica not in df.columns:
+        raise ValueError(f"A coluna '{col_numerica}' não existe no DataFrame.")
+
+    serie = pd.to_numeric(df[col_numerica], errors="coerce").dropna().astype(float)
+    if serie.empty:
+        raise ValueError(
+            f"A coluna '{col_numerica}' não possui valores numéricos válidos."
+        )
+
+    total = int(len(serie))
+
+    # ======================================================================
+    # (2) ESTATÍSTICAS DESCRITIVAS + OUTLIERS (IQR×1.5)
+    # ======================================================================
+    media    = float(np.mean(serie))
+    mediana  = float(np.median(serie))
+    sd       = float(np.std(serie, ddof=0))
+    minimo   = float(serie.min())
+    maximo   = float(serie.max())
+
+    q1, q3   = np.percentile(serie, [25, 75])
+    iqr      = float(q3 - q1)
+    fence_low  = q1 - 1.5 * iqr
+    fence_high = q3 + 1.5 * iqr
+
+    n_out_low  = int((serie < fence_low).sum())
+    n_out_high = int((serie > fence_high).sum())
+
+    # ======================================================================
+    # (3) HISTOGRAMA (BINNING)
+    # ======================================================================
+    NBINS = int(max(1, nbins))
+    counts, edges = np.histogram(serie, bins=NBINS)
+    bin_w = np.diff(edges)
+    bin_c = (edges[:-1] + edges[1:]) / 2
+    bin_l = edges[:-1]
+    bin_r = edges[1:]
+    perc  = (counts / total) * 100.0
+
+    txt = [
+        f"{c:,.0f}<br>({p:.1f}%)".replace(",", ".")
+        for c, p in zip(counts, perc)
+    ]
+
+    customdata = np.column_stack([bin_l, bin_r, perc / 100.0])
+
+    # ======================================================================
+    # (4) CURVA NORMAL TEÓRICA (ESCALADA)
+    # ======================================================================
+    x_vals = np.linspace(serie.min(), serie.max(), 200)
+    sd_eff = sd if sd > 0 else 1e-9
+    y_vals = stats.norm.pdf(x_vals, loc=media, scale=sd_eff) * total * bin_w.mean()
+
+    # ======================================================================
+    # (5) SUBPLOTS: HISTOGRAMA + BOXPLOT
+    # ======================================================================
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.06,
+        row_heights=[0.75, 0.25],
+    )
+
+    # ======================================================================
+    # (6) HISTOGRAMA
+    # ======================================================================
+    fig.add_trace(
+        go.Bar(
+            x=bin_c,
+            y=counts,
+            width=bin_w,
+            name="Distribuição",
+            marker=dict(color=cor_histograma, line=dict(width=1, color=cor_borda)),
+            text=txt,
+            textposition="outside",
+            textfont=dict(size=11),
+            customdata=customdata,
+            hovertemplate=(
+                "Faixa do bin: %{customdata[0]:.1f} – %{customdata[1]:.1f}<br>"
+                "Contagem: %{y:,}<br>"
+                "Percentual: %{customdata[2]:.1%}<extra></extra>"
+            ),
+        ),
+        row=1,
+        col=1,
+    )
+
+    # ======================================================================
+    # (7) CURVA NORMAL + MÉDIA/MEDIANA
+    # ======================================================================
+    fig.add_trace(
+        go.Scatter(
+            x=x_vals,
+            y=y_vals,
+            mode="lines",
+            name="Curva Normal",
+            line=dict(color=cor_normal),
+        ),
+        row=1,
+        col=1,
+    )
+
+    ymax_hist = max(
+        max(counts) if len(counts) else 0,
+        float(np.max(y_vals)) if len(y_vals) else 0,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[media, media],
+            y=[0, ymax_hist],
+            mode="lines",
+            name=f"Média: {media:.2f}",
+            line=dict(color=cor_media, dash="dash"),
+        ),
+        row=1,
+        col=1,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[mediana, mediana],
+            y=[0, ymax_hist],
+            mode="lines",
+            name=f"Mediana: {mediana:.2f}",
+            line=dict(color=cor_mediana, dash="dash"),
+        ),
+        row=1,
+        col=1,
+    )
+
+    # ======================================================================
+    # (8) BOXPLOT HORIZONTAL
+    # ======================================================================
+    fig.add_trace(
+        go.Box(
+            x=serie,
+            name="Boxplot",
+            orientation="h",
+            boxpoints="outliers",
+            marker=dict(color=cor_box, outliercolor=cor_outlier, opacity=0.7),
+            line=dict(color=cor_borda),
+            hovertemplate="Valor=%{x}<extra></extra>",
+            showlegend=True,
+        ),
+        row=2,
+        col=1,
+    )
+
+    # Linhas média/mediana no boxplot
+    fig.add_shape(
+        type="line",
+        x0=media,
+        x1=media,
+        y0=0,
+        y1=1,
+        xref="x2",
+        yref="y2 domain",
+        line=dict(color=cor_media, dash="dash", width=2),
+    )
+    fig.add_shape(
+        type="line",
+        x0=mediana,
+        x1=mediana,
+        y0=0,
+        y1=1,
+        xref="x2",
+        yref="y2 domain",
+        line=dict(color=cor_mediana, dash="dash", width=2),
+    )
+
+    # Fences
+    fig.add_shape(
+        type="line",
+        x0=fence_low,
+        x1=fence_low,
+        y0=0,
+        y1=1,
+        xref="x2",
+        yref="y2 domain",
+        line=dict(color=cor_fence, dash="dot"),
+    )
+    fig.add_shape(
+        type="line",
+        x0=fence_high,
+        x1=fence_high,
+        y0=0,
+        y1=1,
+        xref="x2",
+        yref="y2 domain",
+        line=dict(color=cor_fence, dash="dot"),
+    )
+
+    # ======================================================================
+    # (9) LEGENDA EXTRA (fences, outliers, mínimo, máximo)
+    # ======================================================================
+    fig.add_trace(
+        go.Scatter(
+            x=[None],
+            y=[None],
+            mode="lines",
+            line=dict(color=cor_fence, dash="dot"),
+            name="Limites de outlier (IQR×1.5)",
+        ),
+        row=1,
+        col=1,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[None],
+            y=[None],
+            mode="markers",
+            marker=dict(color="rgba(0,0,0,0)"),
+            showlegend=True,
+            name=f"Outliers abaixo: {n_out_low:,}".replace(",", "."),
+        ),
+        row=1,
+        col=1,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[None],
+            y=[None],
+            mode="markers",
+            marker=dict(color="rgba(0,0,0,0)"),
+            showlegend=True,
+            name=f"Outliers acima: {n_out_high:,}".replace(",", "."),
+        ),
+        row=1,
+        col=1,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[None],
+            y=[None],
+            mode="markers",
+            marker=dict(color="rgba(0,0,0,0)"),
+            showlegend=True,
+            name=f"Mínimo: {minimo:.2f}",
+        ),
+        row=1,
+        col=1,
+    )
+
+    fig.add_trace(
+        go.Scatter(
+            x=[None],
+            y=[None],
+            mode="markers",
+            marker=dict(color="rgba(0,0,0,0)"),
+            showlegend=True,
+            name=f"Máximo: {maximo:.2f}",
+        ),
+        row=1,
+        col=1,
+    )
+
+    # ======================================================================
+    # (10) LAYOUT FINAL
+    # ======================================================================
+    fig.update_layout(
+        title=dict(
+            text=titulo,
+            x=0.5,
+            xanchor="center",
+            font=dict(size=20, family="Arial", color="#1f2c56"),  # sem negrito
+        ),
+        paper_bgcolor="white",
+        plot_bgcolor="white",
+        width=largura_px,
+        height=altura_px,
+        margin=margem,
+        bargap=0.1,
+        legend=dict(x=0.86, y=0.98, bgcolor="rgba(255,255,255,0.85)"),
+    )
+
+    # “Respiro” no topo do histograma
+    fig.update_yaxes(range=[0, ymax_hist * 1.25], row=1, col=1)
+
+    # Eixos + grade
+    fig.update_yaxes(
+        title_text="Número de pessoas",
+        showgrid=True,
+        gridcolor=grid_color,
+        row=1,
+        col=1,
+    )
+    fig.update_xaxes(
+        title_text="Idade",
+        showgrid=True,
+        gridcolor=grid_color,
+        row=1,
+        col=1,
+    )
+    fig.update_xaxes(
+        title_text="Idade",
+        showgrid=False,
+        row=2,
+        col=1,
+    )
+    fig.update_yaxes(
+        title_text="Boxplot",
+        showgrid=False,
+        row=2,
+        col=1,
+    )
+
+    return fig

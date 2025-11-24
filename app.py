@@ -76,13 +76,13 @@ with st.sidebar:
     # ---- Categorias (estilo TABNET) ----
     with st.expander("Painel Estratégico", expanded=False):
         # st.page_link(...) causava KeyError fora de multipage; usar safe_page_link
-        safe_page_link("pages/tau.py", label="Engajamento", icon="👨‍👩‍👧‍👦")
+        safe_page_link("pages/relatorio_executivo.py", label="Relatório Executivo", icon="🎯")
 
     with st.expander("Painel Tático", expanded=False):
-        safe_page_link("pages/relatorio_gestor.py", label="Relatório Gestor", icon="🏠")
+        safe_page_link("pages/relatorio_gestor.py", label="Relatório Gestor", icon="📈")
 
     with st.expander("Painel Operacional", expanded=False):
-        safe_page_link("pages/operacao.py", label="Operação", icon="🏨")
+        safe_page_link("pages/relatorio_operacao.py", label="Operação", icon="🏨")
 
 
 with st.sidebar:
@@ -134,9 +134,9 @@ st.write(
     """
 Bem-vindo ao **Public Health Analytics**. Aqui você encontra três visões para explorar e comunicar dados em saúde:
 
-- **Painel Estratégico (Engajamento):** visão executiva com KPIs para macrogestores.
-- **Painel Tático (Relatório Gestor):** visão tática de metas, variações e alavancas operacionais.
-- **Painel Operacional (Operação):** granularidade para ações do dia a dia.
+- **Painel Executivo:** visão executiva com KPIs para macrogestores.
+- **Painel Tático:** visão tática de metas, variações e alavancas operacionais.
+- **Painel Operacional:** granularidade para ações do dia a dia.
 
 Escolha abaixo por onde começar 👇
 """
@@ -164,16 +164,16 @@ def card(title: str, desc: str, icon: str, page_path: str):
 c1, c2, c3 = st.columns(3)
 with c1:
     card(
-        title="Engajamento",
-        desc="Visão estratégica para comparar participação por condições e perfis populacionais.",
-        icon="👨‍👩‍👧‍👦",
-        page_path="pages/tau.py",
+        title="Relatório Executivo",
+        desc="Visão estratégica para analisar KPIs definidos.",
+        icon="🎯",
+        page_path="pages/relatorio_executivo.py",
     )
 with c2:
     card(
         title="Relatório Gestor",
         desc="KPIs de gestão: metas, tendência, variação e explicações acionáveis.",
-        icon="🏠",
+        icon="📈",
         page_path="pages/relatorio_gestor.py",
     )
 with c3:
@@ -181,7 +181,7 @@ with c3:
         title="Operação",
         desc="Detalhamento operacional por unidade, profissional e procedimento.",
         icon="🏨",
-        page_path="pages/operacao.py",
+        page_path="pages/relatorio_operacao.py",
     )
 
 st.divider()
