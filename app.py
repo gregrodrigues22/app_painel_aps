@@ -1,19 +1,22 @@
 # ---------------------------------------------------------------
 # Set up
 # ---------------------------------------------------------------
-import io 
+import io
 import re
-import streamlit as st
-import plotly.graph_objects as go
 from pathlib import Path
+from datetime import datetime
+import json
+import os
+import unicodedata
+
 import numpy as np
 import pandas as pd
-import json, unicodedata
-import os
-from datetime import datetime
 import pytz
 import plotly.express as px
-import hashlib
+import plotly.graph_objects as go
+import streamlit as st
+
+from auth import ensure_authenticated, logout_button, get_current_user
 
 # ---------------------------------------------------------------
 # Config da página
@@ -21,7 +24,8 @@ import hashlib
 st.set_page_config(layout="wide", page_title="📊 Public Health Analytics")
 
 APP_DIR = Path(__file__).resolve().parent
-ASSETS = APP_DIR / "assets"  
+ASSETS = APP_DIR / "assets"
+
 
 def first_existing(*relative_paths: str) -> Path | None:
     for rel in relative_paths:
@@ -30,8 +34,36 @@ def first_existing(*relative_paths: str) -> Path | None:
             return p
     return None
 
+
 LOGO = first_existing("logo.png", "logo.jpg", "logo.jpeg", "logo.webp")
 
+# ---------------------------------------------------------------
+# AUTENTICAÇÃO (OBRIGATÓRIA PARA ACESSAR O APP)
+# ---------------------------------------------------------------
+# Remove sidebar enquanto não autenticado
+if "authenticated" not in st.session_state or not st.session_state["authenticated"]:
+    st.markdown("""
+        <style>
+            /* Esconde sidebar */
+            section[data-testid="stSidebar"] {
+                display: none !important;
+            }
+            /* Esconde o ícone superior de "páginas" */
+            div[data-testid="stNavigation"] {
+                display: none !important;
+            }
+            /* Esconde decorações */
+            div[data-testid="stDecoration"] {
+                display: none !important;
+            }
+        </style>
+    """, unsafe_allow_html=True)
+
+# Chama autenticação normalmente
+user = ensure_authenticated(min_role="viewer")
+# ---------------------------------------------------------------
+# HEADER / HERO
+# ---------------------------------------------------------------
 st.markdown(
     """
     <div style='background: linear-gradient(to right, #004e92, #000428); padding: 40px; border-radius: 12px; margin-bottom:30px'>
@@ -42,47 +74,89 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-st.markdown("""
+st.markdown(
+    """
 <style>
 /* Esconde a lista padrão de páginas no topo da sidebar */
 [data-testid="stSidebarNav"] { display: none; }
 </style>
-""", unsafe_allow_html=True)
+""",
+    unsafe_allow_html=True,
+)
+
 
 def safe_page_link(path: str, label: str, icon: str | None = None):
     try:
         if (APP_DIR / path).exists():
             st.page_link(path, label=label, icon=icon)
         else:
-            st.button(label, icon=icon, disabled=True, help="Página não disponível neste app.")
+            st.button(
+                label,
+                icon=icon,
+                disabled=True,
+                help="Página não disponível neste app.",
+            )
     except Exception:
-        st.button(label, icon=icon, disabled=True, help="Navegação multipage indisponível aqui.")
+        st.button(
+            label,
+            icon=icon,
+            disabled=True,
+            help="Navegação multipage indisponível aqui.",
+        )
+
 
 # ---------------------------------------------------------------
 # Sidebar
 # ---------------------------------------------------------------
 with st.sidebar:
+    # Bloco do usuário logado
+    st.markdown("### 👤 Usuário")
+    st.write(user.get("email", "Desconhecido"))
+    st.caption(f"Perfil: {user.get('role', 'user')}")
+    logout_button(sidebar=False, label="Sair")
+
+    st.markdown(
+        "<hr style='border:none;border-top:1px solid #ccc;'/>",
+        unsafe_allow_html=True,
+    )
+
     if LOGO:
         st.image(str(LOGO), use_container_width=True)
     else:
         st.warning(f"Logo não encontrada em {ASSETS}/logo.(png|jpg|jpeg|webp)")
-    st.markdown("<hr style='border:none;border-top:1px solid #ccc;'/>", unsafe_allow_html=True)
+
+    st.markdown(
+        "<hr style='border:none;border-top:1px solid #ccc;'/>",
+        unsafe_allow_html=True,
+    )
     st.header("Menu")
 
     with st.expander("Painel Estratégico", expanded=False):
-        safe_page_link("pages/relatorio_executivo.py", label="Relatório Executivo", icon="🎯")
+        safe_page_link(
+            "pages/relatorio_executivo.py",
+            label="Relatório Executivo",
+            icon="🎯",
+        )
 
     with st.expander("Painel Tático", expanded=False):
-        safe_page_link("pages/relatorio_gestor.py", label="Relatório Gestor", icon="📈")
+        safe_page_link(
+            "pages/relatorio_gestor.py",
+            label="Relatório Gestor",
+            icon="📈",
+        )
 
     with st.expander("Painel Operacional", expanded=False):
-        safe_page_link("pages/relatorio_operacao.py", label="Operação", icon="🏨")
-
+        safe_page_link(
+            "pages/relatorio_operacao.py",
+            label="Operação",
+            icon="🏨",
+        )
 
 with st.sidebar:
     st.markdown("<hr/>", unsafe_allow_html=True)
     st.subheader("Conecte-se")
-    st.markdown("""
+    st.markdown(
+        """
 - 💼 [LinkedIn](https://www.linkedin.com/in/gregorio-healthdata/)
 - ▶️ [YouTube](https://www.youtube.com/@Patients2Python)
 - 📸 [Instagram](https://www.instagram.com/patients2python/)
@@ -91,13 +165,17 @@ with st.sidebar:
 - 👥💬 [Comunidade](https://chat.whatsapp.com/CBn0GBRQie5B8aKppPigdd)
 - 🤝💬 [WhatsApp](https://patients2python.sprinthub.site/r/whatsapp-olz)
 - 🎓 [Escola](https://app.patients2python.com.br/browse)
-    """, unsafe_allow_html=True)
+    """,
+        unsafe_allow_html=True,
+    )
 
 # =========================
 # Leitura de CSV (upload)
 # =========================
 @st.cache_data(show_spinner=False)
-def _read_csv_smart(file, force_sep: str | None = None, dtype_map: dict | None = None) -> pd.DataFrame:
+def _read_csv_smart(
+    file, force_sep: str | None = None, dtype_map: dict | None = None
+) -> pd.DataFrame:
     """
     Lê CSV/TXT detectando separador quando possível.
     - force_sep: se informado, usa explicitamente (ex.: ';').
@@ -110,13 +188,20 @@ def _read_csv_smart(file, force_sep: str | None = None, dtype_map: dict | None =
     guess = ";" if head.count(";") > head.count(",") else ","
     return pd.read_csv(io.BytesIO(file.getvalue()), sep=guess, dtype=dtype_map)
 
+
 def schema_df(df: pd.DataFrame) -> pd.DataFrame:
-    return pd.DataFrame({
-        "coluna": df.columns,
-        "dtype": [str(t) for t in df.dtypes],
-        "n_null": [df[c].isna().sum() for c in df.columns],
-        "exemplo": [df[c].dropna().iloc[0] if df[c].notna().any() else None for c in df.columns],
-    })
+    return pd.DataFrame(
+        {
+            "coluna": df.columns,
+            "dtype": [str(t) for t in df.dtypes],
+            "n_null": [df[c].isna().sum() for c in df.columns],
+            "exemplo": [
+                df[c].dropna().iloc[0] if df[c].notna().any() else None
+                for c in df.columns
+            ],
+        }
+    )
+
 
 # =========================
 # Área principal (Landing)
@@ -135,19 +220,36 @@ Escolha abaixo por onde começar 👇
 """
 )
 
+
 def card(title: str, desc: str, icon: str, page_path: str):
     with st.container(border=True):
         st.markdown(f"### {icon} {title}")
         st.caption(desc)
 
-        page_file = (APP_DIR / page_path)
+        page_file = APP_DIR / page_path
         try:
             if page_file.exists():
-                st.page_link(page_path, label=f"Abrir {title}", icon=icon, help=f"Ir para {title}")
+                st.page_link(
+                    page_path,
+                    label=f"Abrir {title}",
+                    icon=icon,
+                    help=f"Ir para {title}",
+                )
             else:
-                st.button(f"Abrir {title}", icon=icon, disabled=True, help="Página não disponível neste app.")
+                st.button(
+                    f"Abrir {title}",
+                    icon=icon,
+                    disabled=True,
+                    help="Página não disponível neste app.",
+                )
         except Exception:
-            st.button(f"Abrir {title}", icon=icon, disabled=True, help="Navegação multipage indisponível aqui.")
+            st.button(
+                f"Abrir {title}",
+                icon=icon,
+                disabled=True,
+                help="Navegação multipage indisponível aqui.",
+            )
+
 
 c1, c2, c3 = st.columns(3)
 with c1:
@@ -173,6 +275,4 @@ with c3:
     )
 
 st.divider()
-st.info(
-    "Dica: a qualquer momento, use o menu lateral para navegar. "
-)
+st.info("Dica: a qualquer momento, use o menu lateral para navegar.")

@@ -27,6 +27,8 @@ from src.plots import (
     pie_standard
 )
 
+from auth import ensure_authenticated, get_current_user, logout_button
+
 # ---------------------------------------------------------------
 # Configaração geral da página
 # ---------------------------------------------------------------
@@ -46,6 +48,18 @@ def first_existing(*relative_paths: str) -> Path | None:
 
 
 LOGO = first_existing("logo.png", "logo.jpg", "logo.jpeg", "logo.webp")
+
+# ---------------------------------------------------------------
+# Proteção da página
+# ---------------------------------------------------------------
+user = ensure_authenticated(min_role="viewer") 
+
+with st.sidebar:
+    st.markdown("### 👤 Usuário")
+    st.write(user.get("email", "Desconhecido"))
+    st.caption(f"Perfil: {user.get('role', 'user')}")
+    logout_button(sidebar=False, label="Sair")
+
 
 # ---------------------------------------------------------------
 # Cabeçalho

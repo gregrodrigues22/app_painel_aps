@@ -1,0 +1,39 @@
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Streamlit cache
+.streamlit/
+
+# Credentials
+credentials.toml
+*.key
+*.pem
+.env
+.env.*
+*.env.local
+
+# VSCode
+.vscode/
+
+# Logs
+*.log
+
+# Data files (prevenir vazamento de dados)
+data/
+*.csv
+*.xlsx
+*.parquet
+*.db
+
+# System files
+.DS_Store
+Thumbs.db
