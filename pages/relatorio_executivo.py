@@ -30,7 +30,7 @@ from src.plots import (
 # ---------------------------------------------------------------
 # Configaração geral da página
 # ---------------------------------------------------------------
-st.set_page_config(layout="wide", page_title="📊 Public Health Analytics — TAU")
+st.set_page_config(layout="wide", page_title="📊 App Painel APS")
 
 # ---------------- Helpers para assets ----------------
 APP_DIR = Path(__file__).resolve().parent
@@ -186,17 +186,14 @@ def validate_and_clean(df_in: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
     df = df_in.copy()
     report_rows = []
 
-    # normalizações úteis antes dos casts
     if "id_pessoa" in df.columns:
         df["id_pessoa"] = df["id_pessoa"].astype("string")
 
     if "sexo" in df.columns:
-        # aceita {1,2} ou {0,1}; mapeia 2->0 para virar binário 0/1 (ajuste conforme sua regra)
         s = pd.to_numeric(df["sexo"], errors="coerce").astype("Int64")
         s = s.replace({2: 0})
         df["sexo"] = s.fillna(0).astype(int)
 
-    # coerções por schema
     for col, (expected, _) in EXPECTED_SCHEMA.items():
         status = "ok"
         details = ""
@@ -221,7 +218,6 @@ def validate_and_clean(df_in: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
                 )
             elif expected == "int01":
                 s = pd.to_numeric(df[col], errors="coerce").fillna(0)
-                # qualq. valor >0 vira 1
                 df[col] = (s > 0).astype(int)
             elif expected == "date":
                 df[col] = (
@@ -230,13 +226,11 @@ def validate_and_clean(df_in: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
                     .dt.tz_localize(None)
                 )
             else:
-                # fallback
                 df[col] = df[col]
         except Exception as e:
             status = "erro"
             details = f"Falha ao converter para {expected}: {e}"
 
-        # checagens específicas
         if expected == "int01" and present:
             invalid = (~df[col].isin([0, 1])).sum()
             if invalid > 0:
@@ -255,7 +249,6 @@ def validate_and_clean(df_in: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]
             (col, expected, str(df[col].dtype), status, details.strip())
         )
 
-    # colunas extras
     extras = [c for c in df.columns if c not in EXPECTED_SCHEMA]
     for c in extras:
         report_rows.append(
@@ -325,7 +318,6 @@ def prepare_tau_base(df: pd.DataFrame) -> pd.DataFrame:
     """
     df = df.copy()
 
-    # escolhe a coluna de data base
     if "mes_atendimento" in df.columns:
         base_date_col = "mes_atendimento"
     elif "data" in df.columns:
@@ -371,17 +363,14 @@ def calcular_desassistidos_6m_por_trimestre(dfF, inter_tipos):
     Retorna um pandas.Series onde o índice é YYYYQX e o valor = nº de desassistidos.
     """
 
-    # Apenas interações válidas
     df_inter = dfF[dfF["_tipo_norm"].isin(inter_tipos)].copy()
 
-    # Pessoas ativas por trimestre
     ativos_q = (
         dfF.groupby("_yq_lbl")["id_pessoa"]
         .nunique()
         .rename("ativos_q")
     )
 
-    # Fim de cada trimestre
     quarter_end = dfF.groupby("_yq_lbl")["_dt"].max()
 
     desassistidos_dict = {}
@@ -391,17 +380,14 @@ def calcular_desassistidos_6m_por_trimestre(dfF, inter_tipos):
         if pd.isna(end):
             continue
 
-        # janela de 6 meses
         start = end - pd.DateOffset(months=6)
 
-        # pessoas ativas no trimestre q
         ids_ativos_q = (
             dfF.loc[dfF["_yq_lbl"] == q, "id_pessoa"]
             .dropna()
             .unique()
         )
 
-        # pessoas com interações dentro da janela 6m
         ids_eng_6m = (
             df_inter.loc[
                 (df_inter["_dt"] > start) & (df_inter["_dt"] <= end),
@@ -411,7 +397,6 @@ def calcular_desassistidos_6m_por_trimestre(dfF, inter_tipos):
             .unique()
         )
 
-        # desassistidos = ativos no trimestre sem interações na janela
         desassistidos = len(set(ids_ativos_q) - set(ids_eng_6m))
         desassistidos_dict[q] = desassistidos
 
@@ -421,7 +406,6 @@ def kpis_desassistidos(series_des):
     if series_des.empty:
         return 0, 0, 0, 0
 
-    # Normalizar índice YYYYQX → PeriodIndex
     idx_norm = (
         series_des.index.to_series()
         .str.replace(r"Q0([1-4])$", r"Q\1", regex=True)
@@ -447,7 +431,7 @@ def hist_interacoes_por_pessoa(
     Wrapper que reaproveita histograma+boxplot de idade
     para mostrar distribuição de interações por pessoa.
     """
-    # usa a função genérica que você já tem
+
     fig = histograma_boxplot_idade_plotly(
         df=df,
         col_numerica=col_numerica,
@@ -457,12 +441,10 @@ def hist_interacoes_por_pessoa(
         titulo=titulo,
     )
 
-    # Ajusta rótulos de eixos
     fig.update_xaxes(title_text="Nº de interações por pessoa", row=1, col=1)
     fig.update_yaxes(title_text="Número de pessoas",            row=1, col=1)
     fig.update_xaxes(title_text="Nº de interações por pessoa", row=2, col=1)
 
-    # Ajusta nomes no hover/legenda para não ficar “idade/alunos”
     for trace in fig.data:
         if getattr(trace, "name", None) == "Idade":
             trace.name = "Interações por pessoa"
@@ -493,7 +475,6 @@ def preparar_pizza_interacoes_zero_vs_maior_zero(
     if dfF.empty or "id_pessoa" not in dfF.columns:
         return pd.DataFrame({"grupo": [], "qtd": []})
 
-    # 1) universo de pessoas
     if somente_ativos_hoje:
         ultimo_mes = dfF["_month_period"].max()
         ids_base = (
@@ -506,10 +487,8 @@ def preparar_pizza_interacoes_zero_vs_maior_zero(
 
     base_pessoas = pd.DataFrame({"id_pessoa": ids_base})
 
-    # 2) filtra apenas tipos de interação desejados
     df_int = dfF[dfF["_tipo_norm"].isin(tipos)].copy()
 
-    # 3) conta interações por pessoa (pode ser 0 se não tiver linha)
     contagens = (
         df_int.groupby("id_pessoa")
         .size()
@@ -622,7 +601,6 @@ with tab2:
         )
         st.stop()
 
-    # ---------- PREP BÁSICO (cacheado) ----------
     df_base = st.session_state["df_tau"]
     try:
         df = prepare_tau_base(df_base)
@@ -657,7 +635,6 @@ with tab2:
     )
 
     with st.container(border=True):
-        # Linha 1 — Sexo | Faixa Etária
         c1, c2 = st.columns(2)
         sexo_opts = (
             ["(Todos)"]
@@ -675,7 +652,6 @@ with tab2:
         )
         fe_sel = c2.selectbox("Faixa Etária", fe_opts, index=0)
 
-        # Linha 2 — checkboxes das condições
         st.markdown("**Condições**")
         cA, cB, cC, cD, cE, cF, cG = st.columns(7)
         chk_alguma = cA.checkbox(
@@ -714,14 +690,12 @@ with tab2:
             else (False)
         )
 
-        # Linha 3 — Período (ano)
         cY = st.columns([1])[0]
         minY, maxY = int(df["_year"].min()), int(df["_year"].max())
         yr1, yr2 = cY.slider(
             "Período (ano)", min_value=minY, max_value=maxY, value=(minY, maxY)
         )
 
-        # Linha 4 — Trimestre (YYYYQQ)
         colQ, _ = st.columns([1, 1])
         yq_all = sorted(df["_yq_lbl"].dropna().unique().tolist())
         if not yq_all:
@@ -733,14 +707,12 @@ with tab2:
             help="Filtra por trimestres. Combine com o intervalo de anos ao lado.",
         )
 
-    # ------ aplica filtros de seleção ------
     mask = (df["_year"].between(yr1, yr2)) & (df["_yq_lbl"].isin(yq_sel))
     if sexo_sel != "(Todos)" and "sexo" in df.columns:
         mask &= df["sexo"].astype(str) == sexo_sel
     if fe_sel != "(Todos)" and "faixa_etaria" in df.columns:
         mask &= df["faixa_etaria"].astype(str) == fe_sel
 
-    # condições
     if chk_alguma and COND_COLS:
         mask &= df[COND_COLS].astype(bool).any(axis=1)
     if chk_multi and "multicomorbido" in df.columns:
@@ -766,7 +738,6 @@ with tab2:
     st.info("📌 Sessão de Grandes Números: visão rápida com os filtros aplicados.")
 
     with st.container(border=True):
-        # ========= TOPO (4 KPIs) =========
         c1, c2, c3, c4 = st.columns(4)
 
         pessoas_dist = (
@@ -800,10 +771,7 @@ with tab2:
 
         st.markdown("---")
 
-        # ========= ENGAJAMENTO TRIMESTRAL (4 KPIs) =========
-        # TAU por trimestre = pessoas com pelo menos 1 interação / pessoas ativas no trimestre
         if "id_pessoa" in dfF.columns and "_yq_lbl" in dfF.columns:
-            # 1) pessoas ativas por trimestre
             base_q = (
                 dfF.groupby("_yq_lbl")["id_pessoa"]
                 .nunique()
@@ -811,7 +779,6 @@ with tab2:
                 .to_frame()
             )
 
-            # 2) pessoas engajadas por trimestre (pelo menos 1 interação)
             inter_mask = dfF["_tipo_norm"].isin(INTER_TIPOS)
             engajados_q = (
                 dfF[inter_mask]
@@ -832,8 +799,6 @@ with tab2:
             tau_min = float(serie_tau.min())
             tau_mean = float(serie_tau.mean())
 
-            # ordenar trimestres cronologicamente para pegar o "último engajamento"
-            # seus rótulos são do tipo "2024Q01" → normalizamos para "2024Q1"
             idx_norm = (
                 serie_tau.index.to_series()
                 .str.replace(r"Q0([1-4])$", r"Q\1", regex=True)
@@ -850,153 +815,6 @@ with tab2:
         e3.metric("Engajamento trimestral médio (TAU)", f"{tau_mean:.1%}")
         e4.metric("Engajamento no último trimestre (TAU)", f"{tau_last:.1%}")
 
-        # ========= TOPO (4 KPIs) =========
-        #c5, c6, c7, c8 = st.columns(4)
-
-        #pessoas_dist = (
-        #    dfF["id_pessoa"].nunique() if "id_pessoa" in dfF.columns else len(dfF)
-        #)
-
-        #if not dfF.empty:
-        #    last_month = dfF["_month_period"].max()
-        #    pessoas_ativas = dfF.loc[
-        #        dfF["_month_period"] == last_month, "id_pessoa"
-        #    ].nunique()
-        #else:
-        #    pessoas_ativas = 0
-
-        #df_inter = dfF[dfF["_tipo_norm"].isin(INTER_TIPOS)]
-        #num_inter = int(len(df_inter))
-        #media_inter = float(num_inter / max(1, pessoas_dist))
-        #df_mensagens = dfF[dfF["_tipo_norm"].isin(INTER_TIPOS_MS)]
-        #num_mensagens = int(len(df_mensagens))
-        #media_mensagens = float(num_mensagens / max(1, pessoas_dist))
-
-        #c5.metric(
-        #    "Número de interações Totais", f"{num_inter:,}".replace(",", ".")
-        #)
-        #c6.metric(
-        #    "Média de interações Totais por pessoa",
-        #    f"{media_inter:,.2f}".replace(",", "."),
-        #)
-        #c7.metric(
-        #    "Número de interações Mensagens",
-        #    f"{num_mensagens:,}".replace(",", "."),
-        #)
-        #c8.metric(
-        #    "Média de interações Mensagens por pessoa",
-        #    f"{media_mensagens:,.2f}".replace(",", "."),
-        #)
-
-        # ========= TOPO (4 KPIs) =========
-        #c9, c10, c11, c12 = st.columns(4)
-
-        #pessoas_dist = (
-        #    dfF["id_pessoa"].nunique() if "id_pessoa" in dfF.columns else len(dfF)
-        #)
-
-        #if not dfF.empty:
-        #    last_month = dfF["_month_period"].max()
-        #    pessoas_ativas = dfF.loc[
-        #        dfF["_month_period"] == last_month, "id_pessoa"
-        #    ].nunique()
-        #else:
-        #    pessoas_ativas = 0
-
-        #df_agendamentos = dfF[dfF["_tipo_norm"].isin(INTER_TIPOS_AT)]
-        #num_agendamentos = int(len(df_agendamentos))
-        #media_agendamentos = float(num_agendamentos / max(1, pessoas_dist))
-        #df_ligacoes = dfF[dfF["_tipo_norm"].isin(INTER_TIPOS_LG)]
-        #num_ligacoes = int(len(df_ligacoes))
-        #media_ligacoes = float(num_ligacoes / max(1, pessoas_dist))
-
-        #c9.metric(
-        #    "Número de interações Agendamento",
-        #    f"{num_agendamentos:,}".replace(",", "."),
-        #)
-        #c10.metric(
-        #    "Média de interações Agendamento por pessoa",
-        #    f"{media_agendamentos:,.2f}".replace(",", "."),
-        #)
-        #c11.metric(
-        #    "Número de interações Ligações",
-        #    f"{num_ligacoes:,}".replace(",", "."),
-        #)
-        #c12.metric(
-        #    "Média de interações Ligações por pessoa",
-        #    f"{media_ligacoes:,.2f}".replace(",", "."),
-        #)
-
-        #st.markdown("---")
-
-        # ========= CONDIÇÕES (4 + 3) =========
-        #if "id_pessoa" in dfF.columns and COND_COLS:
-        #    base_pessoa = dfF.groupby("id_pessoa")[COND_COLS].max(numeric_only=True)
-        #    n_alguma = int(base_pessoa.any(axis=1).sum())
-        #    n_multi = int(
-        #        base_pessoa.get(
-        #            "multicomorbido",
-        #            pd.Series(False, index=base_pessoa.index),
-        #        ).sum()
-        #    )
-        #    n_diab = int(
-        #        base_pessoa.get(
-        #            "diabetes", pd.Series(False, index=base_pessoa.index)
-        #        ).sum()
-        #    )
-        #    n_disl = int(
-        #        base_pessoa.get(
-        #            "dislipidemia",
-        #            pd.Series(False, index=base_pessoa.index),
-        #        ).sum()
-        #    )
-        #    n_hip = int(
-        #        base_pessoa.get(
-        #            "hipertensao",
-        #            pd.Series(False, index=base_pessoa.index),
-        #        ).sum()
-        #    )
-        #    n_obes = int(
-        #        base_pessoa.get(
-        #            "obesidade", pd.Series(False, index=base_pessoa.index)
-        #        ).sum()
-        #    )
-        #    n_sm = int(
-        #        base_pessoa.get(
-        #            "saude_mental",
-        #            pd.Series(False, index=base_pessoa.index),
-        #        ).sum()
-        #    )
-        #else:
-        #    n_alguma = n_multi = n_diab = n_disl = n_hip = n_obes = n_sm = 0
-
-        # Linha 1 (4 KPIs de condição)
-        #k1, k2, k3, k4 = st.columns(4)
-        #k1.metric("Com alguma condição", f"{n_alguma:,}".replace(",", "."))
-        #k2.metric("Multicomorbidos", f"{n_multi:,}".replace(",", "."))
-        #k3.metric("Diabéticos", f"{n_diab:,}".replace(",", "."))
-        #k4.metric("Dislidepidêmicos", f"{n_disl:,}".replace(",", "."))
-
-        # Linha 2 (3 KPIs de condição)
-        #k5, k6, k7, k8 = st.columns(4)
-        #k5.metric("Hipertensos", f"{n_hip:,}".replace(",", "."))
-        #k6.metric("Obesos", f"{n_obes:,}".replace(",", "."))
-        #k7.metric("Pessoas saúde mental", f"{n_sm:,}".replace(",", "."))
-
-        #st.markdown("---")
-
-        # ========= TEMPO (3 KPIs) =========
-        #t1, t2, t3, t4 = st.columns(4)
-        #meses_dist = int(dfF["_month_period"].nunique()) if not dfF.empty else 0
-        #anos_dist = int(dfF["_year"].nunique()) if not dfF.empty else 0
-        #quarters_dist = int(dfF["_yq_lbl"].nunique()) if not dfF.empty else 0
-
-        #t1.metric("Meses distintos", f"{meses_dist:,}".replace(",", "."))
-        #t2.metric("Anos distintos", f"{anos_dist:,}".replace(",", "."))
-        #t3.metric("Quarters distintos", f"{quarters_dist:,}".replace(",", "."))
-
-        #st.markdown("---")
-
     # ------------------------------
     # Sessão de Gráficos
     # ------------------------------
@@ -1006,10 +824,10 @@ with tab2:
 
     with st.expander("Qual número de pessoas ativas por mês?", expanded=False):
         fig = fig_ativos_por_mes(
-            dfF,  # seu dataframe filtrado
-            date_col="_dt",  # ou "mes_atendimento" se você quiser usar essa coluna
+            dfF,  
+            date_col="_dt",  
             id_col="id_pessoa",
-            trend_alpha=0.10,  # mais baixo = mais suave
+            trend_alpha=0.10,  
         )
         st.plotly_chart(fig, use_container_width=True, theme=None)
 
@@ -1064,10 +882,6 @@ with tab2:
             key="tau_heatmap_escala",
         )
 
-        # ------------------------------
-        # Detectar se filtros MUDARAM
-        # (quando só muda a escala, isso aqui continua igual)
-        # ------------------------------
         heatmap_filters = {
             "yr1": yr1,
             "yr2": yr2,
@@ -1087,10 +901,6 @@ with tab2:
             "__tau_heatmap_filters", heatmap_filters
         )
 
-        # ------------------------------
-        # Só recalcula heatmap se filtros mudaram
-        # (não por causa da escala)
-        # ------------------------------
         if "tau_heatmap_figs" not in st.session_state or filters_changed_for_heatmap:
             with st.spinner("Calculando heatmap de engajamento..."):
                 fig_abs, fig_rel = compute_heatmaps_combos_both(
@@ -1104,7 +914,6 @@ with tab2:
         else:
             fig_abs, fig_rel = st.session_state["tau_heatmap_figs"]
 
-        # Agora só escolhe qual exibir, sem recalcular nada
         if escala == "Relativo (% por trimestre)":
             fig = fig_rel
         else:
@@ -1113,7 +922,6 @@ with tab2:
         st.plotly_chart(fig, use_container_width=True)
 
     with st.expander("Como está a meta do trimestre?", expanded=False):
-        # 1) escolha do trimestre
         quarters = sorted(dfF["_yq_lbl"].dropna().unique().tolist())
         if not quarters:
             st.info("Sem quarters após filtros.")
@@ -1121,11 +929,9 @@ with tab2:
 
         q_sel = st.selectbox("Trimestre", quarters, index=len(quarters) - 1)
 
-        # 2) meta do trimestre (0–100%)
         meta_perc = st.slider("Meta do trimestre (TAU %)", 0, 100, value=80, step=1)
         meta_tau = meta_perc / 100.0
 
-        # 3) feriados (opcional)
         feriados_txt = st.text_area(
             "Feriados (opcional, 1 por linha no formato AAAA-MM-DD).",
             value="",
@@ -1133,7 +939,6 @@ with tab2:
         )
         feriados = [s.strip() for s in feriados_txt.splitlines() if s.strip()]
 
-        # normalização do rótulo
         q_sel_norm = re.sub(r"Q0([1-4])$", r"Q\1", q_sel)
 
         fig_meta, kpis = meta_trimestral_acumulada(
@@ -1198,7 +1003,6 @@ with tab3:
         )
         st.stop()
 
-    # ---------- PREP BÁSICO (cacheado) ----------
     df_base = st.session_state["df_tau"]
     try:
         df = prepare_tau_base(df_base)
@@ -1233,7 +1037,6 @@ with tab3:
     )
 
     with st.container(border=True):
-        # Linha 1 — Sexo | Faixa Etária
         c1, c2 = st.columns(2)
         sexo_opts = (
             ["(Todos)"]
@@ -1251,7 +1054,6 @@ with tab3:
         )
         fe_sel = c2.selectbox("Faixa Etária", fe_opts, index=0, key="desassist_faixa_etaria",)
 
-        # Linha 2 — checkboxes das condições
         st.markdown("**Condições**")
         cA, cB, cC, cD, cE, cF, cG = st.columns(7)
         chk_alguma = cA.checkbox(
@@ -1291,14 +1093,12 @@ with tab3:
             else (False)
         )
 
-        # Linha 3 — Período (ano)
         cY = st.columns([1])[0]
         minY, maxY = int(df["_year"].min()), int(df["_year"].max())
         yr1, yr2 = cY.slider(
             "Período (ano)", min_value=minY, max_value=maxY, value=(minY, maxY), key="desassist_periodo_ano"
         )
 
-        # Linha 4 — Trimestre (YYYYQQ)
         colQ, _ = st.columns([1, 1])
         yq_all = sorted(df["_yq_lbl"].dropna().unique().tolist())
         if not yq_all:
@@ -1311,14 +1111,12 @@ with tab3:
             key="desassist_trimestre"
         )
 
-    # ------ aplica filtros de seleção ------
     mask = (df["_year"].between(yr1, yr2)) & (df["_yq_lbl"].isin(yq_sel))
     if sexo_sel != "(Todos)" and "sexo" in df.columns:
         mask &= df["sexo"].astype(str) == sexo_sel
     if fe_sel != "(Todos)" and "faixa_etaria" in df.columns:
         mask &= df["faixa_etaria"].astype(str) == fe_sel
 
-    # condições
     if chk_alguma and COND_COLS:
         mask &= df[COND_COLS].astype(bool).any(axis=1)
     if chk_multi and "multicomorbido" in df.columns:
@@ -1344,7 +1142,6 @@ with tab3:
     st.info("📌 Sessão de Grandes Números: visão rápida com os filtros aplicados.")
 
     with st.container(border=True):
-        # ========= TOPO (4 KPIs) =========
         c1, c2, c3, c4 = st.columns(4)
 
         pessoas_dist = (
@@ -1390,151 +1187,6 @@ with tab3:
         d2.metric("Mínimo desassistidos (6m)", f"{des_min:,}".replace(",", "."))
         d3.metric("Média desassistidos (6m)", f"{des_mean:,.1f}".replace(",", "."))
         d4.metric("Último trimestre (desassistidos 6m)", f"{des_last:,}".replace(",", "."))
-
-        # ========= TOPO (4 KPIs) =========
-        #c5, c6, c7, c8 = st.columns(4)
-
-        #pessoas_dist = (
-        #    dfF["id_pessoa"].nunique() if "id_pessoa" in dfF.columns else len(dfF)
-        #)
-
-        #if not dfF.empty:
-        #    last_month = dfF["_month_period"].max()
-        #    pessoas_ativas = dfF.loc[
-        #       dfF["_month_period"] == last_month, "id_pessoa"
-        #    ].nunique()
-        #else:
-        #    pessoas_ativas = 0
-
-        #df_inter = dfF[dfF["_tipo_norm"].isin(INTER_TIPOS)]
-        #num_inter = int(len(df_inter))
-        #media_inter = float(num_inter / max(1, pessoas_dist))
-        #df_mensagens = dfF[dfF["_tipo_norm"].isin(INTER_TIPOS_MS)]
-        #num_mensagens = int(len(df_mensagens))
-        #media_mensagens = float(num_mensagens / max(1, pessoas_dist))
-
-        #c5.metric(
-        #    "Número de interações Totais", f"{num_inter:,}".replace(",", ".")
-        #)
-        #c6.metric(
-        #    "Média de interações Totais por pessoa",
-        #    f"{media_inter:,.2f}".replace(",", "."),
-        #)
-        #c7.metric(
-        #    "Número de interações Mensagens",
-        #    f"{num_mensagens:,}".replace(",", "."),
-        #)
-        #c8.metric(
-        #    "Média de interações Mensagens por pessoa",
-        #    f"{media_mensagens:,.2f}".replace(",", "."),
-        #)
-
-        # ========= TOPO (4 KPIs) =========
-        #c9, c10, c11, c12 = st.columns(4)
-
-        #pessoas_dist = (
-        #    dfF["id_pessoa"].nunique() if "id_pessoa" in dfF.columns else len(dfF)
-        #)
-
-        #if not dfF.empty:
-        #    last_month = dfF["_month_period"].max()
-        #    pessoas_ativas = dfF.loc[
-        #        dfF["_month_period"] == last_month, "id_pessoa"
-        #    ].nunique()
-        #else:
-        #    pessoas_ativas = 0
-
-        #df_agendamentos = dfF[dfF["_tipo_norm"].isin(INTER_TIPOS_AT)]
-        #num_agendamentos = int(len(df_agendamentos))
-        #media_agendamentos = float(num_agendamentos / max(1, pessoas_dist))
-        #df_ligacoes = dfF[dfF["_tipo_norm"].isin(INTER_TIPOS_LG)]
-        #num_ligacoes = int(len(df_ligacoes))
-        #media_ligacoes = float(num_ligacoes / max(1, pessoas_dist))
-
-        #c9.metric(
-        #    "Número de interações Agendamento",
-        #    f"{num_agendamentos:,}".replace(",", "."),
-        #)
-        #c10.metric(
-        #    "Média de interações Agendamento por pessoa",
-        #    f"{media_agendamentos:,.2f}".replace(",", "."),
-        #)
-        #c11.metric(
-        #    "Número de interações Ligações",
-        #    f"{num_ligacoes:,}".replace(",", "."),
-        #)
-        #c12.metric(
-        #    "Média de interações Ligações por pessoa",
-        #    f"{media_ligacoes:,.2f}".replace(",", "."),
-        #)
-
-        #st.markdown("---")
-
-        # ========= CONDIÇÕES (4 + 3) =========
-        #if "id_pessoa" in dfF.columns and COND_COLS:
-        #    base_pessoa = dfF.groupby("id_pessoa")[COND_COLS].max(numeric_only=True)
-        #    n_alguma = int(base_pessoa.any(axis=1).sum())
-        #    n_multi = int(
-        #        base_pessoa.get(
-        #            "multicomorbido",
-        #            pd.Series(False, index=base_pessoa.index),
-        #        ).sum()
-        #    )
-        #    n_diab = int(
-        #        base_pessoa.get(
-        #            "diabetes", pd.Series(False, index=base_pessoa.index)
-        #        ).sum()
-        #    )
-        #    n_disl = int(
-        #        base_pessoa.get(
-        #            "dislipidemia",
-        #            pd.Series(False, index=base_pessoa.index),
-        #        ).sum()
-        #    )
-        #    n_hip = int(
-        #        base_pessoa.get(
-        #            "hipertensao",
-        #            pd.Series(False, index=base_pessoa.index),
-        #        ).sum()
-        #    )
-        #    n_obes = int(
-        #        base_pessoa.get(
-        #            "obesidade", pd.Series(False, index=base_pessoa.index)
-        #        ).sum()
-        #    )
-        #    n_sm = int(
-        #        base_pessoa.get(
-        #            "saude_mental",
-        #            pd.Series(False, index=base_pessoa.index),
-        #        ).sum()
-        #    )
-        #else:
-        #    n_alguma = n_multi = n_diab = n_disl = n_hip = n_obes = n_sm = 0
-
-        # Linha 1 (4 KPIs de condição)
-        #k1, k2, k3, k4 = st.columns(4)
-        #k1.metric("Com alguma condição", f"{n_alguma:,}".replace(",", "."))
-        #k2.metric("Multicomorbidos", f"{n_multi:,}".replace(",", "."))
-        #k3.metric("Diabéticos", f"{n_diab:,}".replace(",", "."))
-        #k4.metric("Dislidepidêmicos", f"{n_disl:,}".replace(",", "."))
-
-        # Linha 2 (3 KPIs de condição)
-        #k5, k6, k7, k8 = st.columns(4)
-        #k5.metric("Hipertensos", f"{n_hip:,}".replace(",", "."))
-        #k6.metric("Obesos", f"{n_obes:,}".replace(",", "."))
-        #k7.metric("Pessoas saúde mental", f"{n_sm:,}".replace(",", "."))
-
-        #st.markdown("---")
-
-        # ========= TEMPO (3 KPIs) =========
-        #t1, t2, t3, t4 = st.columns(4)
-        #meses_dist = int(dfF["_month_period"].nunique()) if not dfF.empty else 0
-        #anos_dist = int(dfF["_year"].nunique()) if not dfF.empty else 0
-        #quarters_dist = int(dfF["_yq_lbl"].nunique()) if not dfF.empty else 0
-
-        #t1.metric("Meses distintos", f"{meses_dist:,}".replace(",", "."))
-        #t2.metric("Anos distintos", f"{anos_dist:,}".replace(",", "."))
-        #t3.metric("Quarters distintos", f"{quarters_dist:,}".replace(",", "."))
 
     # ------------------------------
     # Sessão de Gráficos
@@ -1588,7 +1240,6 @@ with tab3:
             key="pizza_interacoes_ativos",
         )
 
-        # 🔥 AGORA MULTISELECT
         tipo_pizza = st.multiselect(
             "Tipos de interação",
             options=["Mensagens", "Agendamentos", "Ligações", "Todas"],
@@ -1596,9 +1247,6 @@ with tab3:
             key="pizza_interacoes_tipo_multi",
         )
 
-        # --------------------------------------------
-        # INTERPRETAÇÃO DO MULTISELECT
-        # --------------------------------------------
         if "Todas" in tipo_pizza:
             tipos_pizza = INTER_TIPOS
             titulo_pizza = "Pessoas com e sem interações (todas as interações)"
@@ -1648,16 +1296,12 @@ with tab3:
             index=0,
         )
 
-        # 🔥 MULTISELECT AQUI
         tipo_hist = st.multiselect(
             "Tipos de interação",
             options=["Mensagens", "Agendamentos", "Ligações", "Todas"],
             default=["Todas"],
         )
 
-        # --------------------------------------------
-        # INTERPRETAÇÃO DO MULTISELECT
-        # --------------------------------------------
         if "Todas" in tipo_hist:
             tipos = INTER_TIPOS
             titulo = "Distribuição de interações totais por pessoa"
@@ -1675,10 +1319,8 @@ with tab3:
                 + ", ".join(tipo_hist)
             )
 
-        # FILTROS DE INTERAÇÃO
         df_int = dfF[dfF["_tipo_norm"].isin(tipos)].copy()
 
-        # FILTRO DE ATIVOS
         if filtro_ativos == "Apenas pessoas ativas hoje":
             ultimo_mes = dfF["_month_period"].max()
             ids_ativos = (

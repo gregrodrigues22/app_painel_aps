@@ -1,4 +1,6 @@
-# src/plots.py
+# ------------------------------------------------------------------
+# Imports
+# ------------------------------------------------------------------
 from __future__ import annotations
 import pandas as pd
 import plotly.graph_objects as go
@@ -7,9 +9,11 @@ import numpy as np
 from itertools import cycle
 import unicodedata
 from typing import Iterable, Optional
+from scipy import stats
+from plotly.subplots import make_subplots
 
 # ------------------------------------------------------------------
-# Utilitário simples de formatação (sem separador de milhares)
+# Utilitários
 # ------------------------------------------------------------------
 
 def _fmt(v: float | int | None, thousands: bool = False) -> str:
@@ -19,7 +23,6 @@ def _fmt(v: float | int | None, thousands: bool = False) -> str:
         v_int = int(round(float(v)))
     except Exception:
         return ""
-    # por padrão NÃO usar separador de milhar
     return f"{v_int:,}".replace(",", ".") if thousands else f"{v_int}"
 
 def _dias_uteis(start: pd.Timestamp,
@@ -29,7 +32,6 @@ def _dias_uteis(start: pd.Timestamp,
     Retorna os dias úteis entre start e end, excluindo feriados.
     Aceita feriados como lista/iterável, DatetimeIndex, Series etc.
     """
-    # normaliza o iterável de feriados sem usar 'or' (evita ambiguidade)
     if feriados is None:
         feriados_list = []
     else:
@@ -59,26 +61,14 @@ def detect_cond_cols(df: pd.DataFrame, cond_cols: list[str] | None = None) -> li
     base = cond_cols or DEFAULT_COND_COLS
     return [c for c in base if c in df.columns]
 
-
-# ------------------------------------------------------------
-# Utilitário simples de formatação numérica
-# ------------------------------------------------------------
-def _fmt(v: float | int | None, thousands: bool = False) -> str:
-    if v is None or (isinstance(v, float) and (np.isnan(v) or np.isinf(v))):
-        return ""
-    if thousands:
-        # usa separador de milhar com vírgula e troca por ponto
-        return f"{int(round(v)):,}".replace(",", ".")
-    return str(int(round(v)))
-
 # ------------------------------------------------------------------
-# 1) Número de ativos por mês (pessoas distintas / mês) date_col deve ser datetime-like
+# Número de ativos por mês 
 # ------------------------------------------------------------------
 def fig_ativos_por_mes(
     df: pd.DataFrame,
     *,
-    date_col: str,       # coluna de data (datetime ou string YYYY-MM)
-    id_col: str,         # id da pessoa (distinct/unique por mês)
+    date_col: str,       
+    id_col: str,       
     title: str = "Pessoas ativas por mês",
     trend_alpha: float = 0.10,
 ) -> go.Figure:
@@ -88,7 +78,6 @@ def fig_ativos_por_mes(
     """
     d = df.copy()
 
-    # mês como período e etiqueta "YYYY_QQ" / "YYYY-MM"
     dt = pd.to_datetime(d[date_col], errors="coerce")
     d["_period"] = dt.dt.to_period("M").astype(str)
 
@@ -117,25 +106,25 @@ def fig_ativos_por_mes(
     )
 
 # ------------------------------------------------------------------
-# Barras por período + YoY + média + tendência + (opcional) MM
+# Barras por período + YoY + média + tendência 
 # ------------------------------------------------------------------
 def bar_yoy_trend(
     df: pd.DataFrame,
     *,
-    x: str,                         # coluna do eixo X (mês/ano em string ou categoria)
-    y: str,                         # métrica
+    x: str,                    
+    y: str,                      
     title: str = "Série temporal",
-    x_is_year: bool = False,        # se True, ordena/complete anos (min..max)
+    x_is_year: bool = False,      
     fill_missing_years: bool = True,
     show_ma: bool = True,
     ma_window: int = 3,
     show_mean: bool = True,
     show_trend: bool = True,
-    trend_alpha: float = 0.10,      # suavização EWMA (0.05..0.3 fica bom)
-    legend_pos: str = "top",        # "top" ou "bottom"
+    trend_alpha: float = 0.10,     
+    legend_pos: str = "top",     
     y_label: str | None = None,
-    thousands: bool = False,        # apenas mantém compat, não divide por mil
-    x_angle: int = 90,              # rotação do rótulo do eixo X
+    thousands: bool = False,      
+    x_angle: int = 90,            
 ) -> go.Figure:
     """
     Barras por período com:
@@ -144,7 +133,7 @@ def bar_yoy_trend(
       - média móvel, linha de tendência suavizada e linha de média;
       - rótulos MoM coloridos por ponto (verde/vermelho) e legenda com média do MoM.
     """
-    # ---------- validações básicas ----------
+
     if df.empty or x not in df.columns or y not in df.columns:
         fig = go.Figure()
         fig.update_layout(
@@ -155,7 +144,6 @@ def bar_yoy_trend(
         )
         return fig
 
-    # ---------- prepara base ----------
     d0 = df[[x, y]].copy()
     d0[y] = pd.to_numeric(d0[y], errors="coerce")
 
@@ -170,18 +158,15 @@ def bar_yoy_trend(
         d["x_str"] = d[x].astype(str)
         cat_array = d["x_str"].tolist()
     else:
-        # mantém ordem original de entrada (ou já ordenada antes)
         d0[x] = d0[x].astype(str)
         d = d0.copy()
         d["x_str"] = d[x]
         cat_array = d["x_str"].tolist()
 
-    # ---------- estatísticas ----------
     media = float(d[y].mean(skipna=True)) if show_mean else np.nan
     span = max(1.0, np.nanmax(d[y]) if d[y].notna().any() else 1.0)
     top_room = (np.nanmax(d[y]) if d[y].notna().any() else 1.0) + span * 0.12
 
-    # melhor/pior
     best_idx = int(d[y].idxmax()) if d[y].notna().any() else None
     worst_idx = int(d[y].idxmin()) if d[y].notna().any() else None
 
@@ -190,10 +175,8 @@ def bar_yoy_trend(
     is_above = d[y] >= media if show_mean else pd.Series(False, index=d.index)
     is_below = d[y] <  media if show_mean else pd.Series(False, index=d.index)
 
-    # ---------- figure ----------
     fig = go.Figure()
 
-    # Helpers
     def _fmt(v, use_thousands=False):
         if pd.isna(v):
             return ""
@@ -201,7 +184,6 @@ def bar_yoy_trend(
             return f"{float(v)/1000:,.1f}k".replace(",", ".")
         return f"{int(v):,}".replace(",", ".")
 
-    # Paleta
     GREEN_LIGHT = "#a5d6a7"
     GREEN_STRONG = "#2e7d32"
     RED_LIGHT   = "#ef9a9a"
@@ -210,8 +192,6 @@ def bar_yoy_trend(
     TREND_COLOR = "#6e6e6e"
     MA_COLOR    = "#1f77b4"
 
-    # ---------- barras principais ----------
-    # acima da média (exclui best/worst para evitar duplicação visual)
     mask_up = is_above & ~is_best & ~is_worst
     if mask_up.any():
         fig.add_bar(
@@ -228,7 +208,6 @@ def bar_yoy_trend(
             hovertemplate="<b>%{x}</b><br>Valor: %{y:,}<extra></extra>",
         )
 
-    # abaixo da média (exclui best/worst)
     mask_dn = is_below & ~is_best & ~is_worst
     if mask_dn.any():
         fig.add_bar(
@@ -245,7 +224,6 @@ def bar_yoy_trend(
             hovertemplate="<b>%{x}</b><br>Valor: %{y:,}<extra></extra>",
         )
 
-    # melhor mês
     if is_best.any():
         fig.add_bar(
             x=d.loc[is_best, "x_str"],
@@ -261,7 +239,6 @@ def bar_yoy_trend(
             hovertemplate="<b>%{x}</b><br>Valor: %{y:,}<extra></extra>",
         )
 
-    # pior mês
     if is_worst.any():
         fig.add_bar(
             x=d.loc[is_worst, "x_str"],
@@ -277,7 +254,6 @@ def bar_yoy_trend(
             hovertemplate="<b>%{x}</b><br>Valor: %{y:,}<extra></extra>",
         )
 
-    # ---------- média móvel ----------
     if show_ma:
         ma = d[y].rolling(ma_window, min_periods=1).mean()
         fig.add_scatter(
@@ -288,7 +264,6 @@ def bar_yoy_trend(
             name=f"Média móvel ({ma_window})",
         )
 
-    # ---------- tendência suavizada ----------
     if show_trend:
         trend = d[y].ewm(alpha=trend_alpha, adjust=False).mean()
         fig.add_scatter(
@@ -299,7 +274,6 @@ def bar_yoy_trend(
             name="Tendência suavizada",
         )
 
-    # ---------- linha da média ----------
     if show_mean:
         fig.add_scatter(
             x=d["x_str"],
@@ -309,7 +283,6 @@ def bar_yoy_trend(
             name=f"Média ({_fmt(media, thousands)})",
         )
 
-    # ---------- Δ vs mês anterior (MoM) – rótulos coloridos ----------
     d["mom_pct"] = d[y].pct_change() * 100.0
     y_base = d[y].fillna(media if show_mean else d[y].median())
     offset = span * 0.06
@@ -322,7 +295,6 @@ def bar_yoy_trend(
     def _fmt_pct(v):
         return "" if pd.isna(v) else f"{v:+.0f}%"
 
-    # positivos
     fig.add_scatter(
         x=d.loc[mask_pos, "x_str"],
         y=y_txt.loc[mask_pos],
@@ -334,7 +306,7 @@ def bar_yoy_trend(
         showlegend=False,
         cliponaxis=False,
     )
-    # negativos
+
     fig.add_scatter(
         x=d.loc[mask_neg, "x_str"],
         y=y_txt.loc[mask_neg],
@@ -346,7 +318,7 @@ def bar_yoy_trend(
         showlegend=False,
         cliponaxis=False,
     )
-    # zeros/NaN (opcional)
+
     fig.add_scatter(
         x=d.loc[mask_zero, "x_str"],
         y=y_txt.loc[mask_zero],
@@ -359,7 +331,6 @@ def bar_yoy_trend(
         cliponaxis=False,
     )
 
-    # legenda com média do MoM (dummy trace)
     mom_mean = float(np.nanmean(d["mom_pct"])) if d["mom_pct"].notna().any() else 0.0
     fig.add_scatter(
         x=[None], y=[None],
@@ -369,7 +340,6 @@ def bar_yoy_trend(
         showlegend=True,
     )
 
-    # ---------- layout e eixos ----------
     if legend_pos == "bottom":
         legend_cfg = dict(orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0)
         top_margin = 60
@@ -393,7 +363,7 @@ def bar_yoy_trend(
         tickmode="array",
         tickvals=cat_array,
         ticktext=cat_array,
-        tickangle=x_angle,           # <<< rotação
+        tickangle=x_angle,         
     )
     fig.update_layout(
         title=dict(text=title, y=0.98, pad=dict(b=title_pad_b)),
@@ -408,10 +378,13 @@ def bar_yoy_trend(
 
     return fig
 
+# ------------------------------------------------------------------
+# TAU Trimestral Acumulado por DIA
+# ------------------------------------------------------------------
 def tau_trimestral_acumulado_por_dia(
     df: pd.DataFrame,
     *,
-    date_col: str,                 # "data" | "mes_atendimento" | "_dt"
+    date_col: str,                
     id_col: str = "id_pessoa",
     tipo_col: str = "tipo",
     inter_tipos: set | None = None,
@@ -445,7 +418,6 @@ def tau_trimestral_acumulado_por_dia(
 
     d = df[[dc, id_col, tc]].copy()
 
-    # --------- normalização mínima ---------
     d[dc] = pd.to_datetime(d[dc], errors="coerce")
     d = d.dropna(subset=[dc])
     d["_date"] = d[dc].dt.normalize()
@@ -466,10 +438,8 @@ def tau_trimestral_acumulado_por_dia(
 
     d["_tipo_norm"] = d[tc].map(_norm)
 
-    # --------- denominadores (ativos por trimestre) ---------
     ativos_q = d.groupby("_quarter")[id_col].nunique()
 
-    # --------- primeira interação no trimestre ---------
     d_inter = d[d["_tipo_norm"].isin(inter_tipos)]
     first_inter = (
         d_inter.groupby(["_quarter", id_col])["_date"]
@@ -477,9 +447,8 @@ def tau_trimestral_acumulado_por_dia(
         .reset_index(name="first_day")
     )
 
-    # --------- gera a série diária acumulada de TAU por trimestre ---------
     palette_cycle = cycle(["#1E88E5", "#1E88E5"])
-    series = []   # lista de dicts: {"q": Period, "df": df_tau, "color": color}
+    series = [] 
 
     for q, df_q in first_inter.groupby("_quarter"):
         denom = int(ativos_q.get(q, 0))
@@ -489,7 +458,6 @@ def tau_trimestral_acumulado_por_dia(
         q_start = q.start_time.normalize()
         q_end   = q.end_time.normalize()
 
-        # contagem por dia do "primeiro engajamento" e cumulativa
         s_counts = df_q["first_day"].value_counts().sort_index()
         idx = pd.date_range(q_start, q_end, freq="D")
         cum_engajados = s_counts.reindex(idx, fill_value=0).cumsum()
@@ -504,19 +472,16 @@ def tau_trimestral_acumulado_por_dia(
                           template="plotly_white", height=320)
         return fig
 
-    # média geral sobre todos os pontos de tau
     full = pd.concat([s["df"] for s in series], ignore_index=True)
     media_tau = float(full["tau"].mean())
 
-    # --------- figura ---------
     fig = go.Figure()
 
     for s in series:
-        qlbl = str(s["q"])            # ex.: '2023Q2'
+        qlbl = str(s["q"])        
         color = s["color"]
         df_tau = s["df"]
 
-        # linha do trimestre
         fig.add_scatter(
             x=df_tau["date"], y=df_tau["tau"],
             mode="lines",
@@ -526,7 +491,6 @@ def tau_trimestral_acumulado_por_dia(
             name=qlbl,
         )
 
-        # rótulo com o % no ponto final (mesma cor da linha)
         x_end = df_tau["date"].iloc[-1]
         y_end = df_tau["tau"].iloc[-1]
         fig.add_scatter(
@@ -539,13 +503,12 @@ def tau_trimestral_acumulado_por_dia(
             showlegend=False,
         )
 
-        # rótulo do trimestre no ponto de TAU máximo
         imax = int(np.nanargmax(df_tau["tau"].to_numpy()))
         x_max = df_tau["date"].iloc[imax]
         y_max = df_tau["tau"].iloc[imax]
         fig.add_annotation(
             x=x_max,
-            y=min(y_max - 0.05, 0.95),   # move o texto para baixo e evita passar de 95%
+            y=min(y_max - 0.05, 0.95),  
             text=qlbl,
             showarrow=False,
             yshift=0,
@@ -554,7 +517,6 @@ def tau_trimestral_acumulado_por_dia(
             align="center",
         )
 
-    # linha da média geral
     fig.add_scatter(
         x=[full["date"].min(), full["date"].max()],
         y=[media_tau, media_tau], mode="lines",
@@ -571,14 +533,17 @@ def tau_trimestral_acumulado_por_dia(
         template="plotly_white",
         hovermode="x",
         margin=dict(l=40, r=10, t=60, b=40),
-        showlegend=False,  # << remove legenda
+        showlegend=False, 
     )
     return fig
 
+# ------------------------------------------------------------------
+# TAU Mensal por Trimestre em Heatmap
+# ------------------------------------------------------------------
 def tau_distribuicao_mensal_por_trimestre(
     df: pd.DataFrame,
     *,
-    date_col: str,                 # "data" | "mes_atendimento" | "_dt"
+    date_col: str,               
     id_col: str = "id_pessoa",
     tipo_col: str = "tipo",
     inter_tipos: set | None = None,
@@ -590,7 +555,6 @@ def tau_distribuicao_mensal_por_trimestre(
         fig.update_layout(title="Sem dados", template="plotly_white", height=320)
         return fig
 
-    # --------- coluna de data (prioriza diário) ---------
     possiveis = [date_col, "data", "_dt", "mes_atendimento"]
     dc = next((c for c in possiveis if c in df.columns), None)
 
@@ -602,7 +566,6 @@ def tau_distribuicao_mensal_por_trimestre(
     if id_col not in df.columns:
         raise KeyError(f"Coluna de id '{id_col}' não encontrada.")
 
-    # --------- coluna de tipo ---------
     tc = tipo_col
     if tc not in df.columns:
         for cand in ["tipo_interacao", "interaction_type", "evento", "tipo"]:
@@ -616,13 +579,11 @@ def tau_distribuicao_mensal_por_trimestre(
 
     d = df[[dc, id_col, tc]].copy()
 
-    # --------- normalização mínima ---------
     d[dc] = pd.to_datetime(d[dc], errors="coerce")
     d = d.dropna(subset=[dc])
     d["_date"] = d[dc].dt.normalize()
     d["_quarter"] = d["_date"].dt.to_period("Q")
 
-    # --------- tipos de interação que contam como engajamento ---------
     if not inter_tipos:
         inter_tipos = {
             "mensagem", "mensagens", "msg", "whatsapp",
@@ -640,7 +601,6 @@ def tau_distribuicao_mensal_por_trimestre(
 
     d["_tipo_norm"] = d[tc].map(_norm)
 
-    # --------- primeira interação no trimestre ---------
     d_inter = d[d["_tipo_norm"].isin(inter_tipos)]
     if d_inter.empty:
         fig = go.Figure()
@@ -657,19 +617,15 @@ def tau_distribuicao_mensal_por_trimestre(
         .reset_index(name="first_day")
     )
 
-    # --------- mês dentro do trimestre (1º, 2º, 3º) ---------
-    # mês de início do trimestre (Jan/Apr/Jul/Oct etc.)
     first_inter["_q_start_month"] = first_inter["_quarter"].dt.start_time.dt.month
     first_inter["_month_in_quarter"] = (
         first_inter["first_day"].dt.month - first_inter["_q_start_month"] + 1
     )
 
-    # garante apenas valores 1, 2 ou 3
     first_inter = first_inter[
         first_inter["_month_in_quarter"].isin([1, 2, 3])
     ].copy()
 
-    # --------- contagem e proporção por trimestre x mês ---------
     dist = (
         first_inter
         .groupby(["_quarter", "_month_in_quarter"])[id_col]
@@ -682,7 +638,6 @@ def tau_distribuicao_mensal_por_trimestre(
         fig.update_layout(title="Sem engajados por trimestre.", template="plotly_white", height=320)
         return fig
 
-    # garante que todos os meses (1,2,3) existam para cada trimestre
     quarters = dist["_quarter"].unique()
     idx = pd.MultiIndex.from_product(
         [quarters, [1, 2, 3]],
@@ -695,25 +650,20 @@ def tau_distribuicao_mensal_por_trimestre(
             .reset_index()
     )
 
-    # proporção dentro do trimestre
     dist["total_q"] = dist.groupby("_quarter")["engajados"].transform("sum")
-    # se por algum bug tiver trimestre com total 0, evita divisão por zero
     dist = dist[dist["total_q"] > 0].copy()
     dist["prop"] = dist["engajados"] / dist["total_q"]
 
-    # labels bonitinhos
     dist["_quarter_str"] = dist["_quarter"].astype(str)
     month_labels = {1: "1º mês", 2: "2º mês", 3: "3º mês"}
     dist["month_label"] = dist["_month_in_quarter"].map(month_labels)
 
-    # --------- pivot para heatmap ---------
     heat = (
         dist
         .pivot(index="month_label", columns="_quarter_str", values="prop")
-        .sort_index()  # mantém 1º, 2º, 3º mês na ordem
+        .sort_index() 
     )
 
-    # texto com porcentagem
     text_vals = heat.applymap(lambda v: f"{v:.0%}" if pd.notna(v) else "")
 
     fig = go.Figure(
@@ -741,10 +691,13 @@ def tau_distribuicao_mensal_por_trimestre(
 
     return fig
     
+# ------------------------------------------------------------------
+# TAU Mensal por Trimestre em Barras
+# ------------------------------------------------------------------
 def tau_distribuicao_mensal_por_trimestre_barras(
     df: pd.DataFrame,
     *,
-    date_col: str,                 # "data" | "mes_atendimento" | "_dt"
+    date_col: str,                
     id_col: str = "id_pessoa",
     tipo_col: str = "tipo",
     inter_tipos: set | None = None,
@@ -756,7 +709,6 @@ def tau_distribuicao_mensal_por_trimestre_barras(
         fig.update_layout(title="Sem dados", template="plotly_white", height=320)
         return fig
 
-    # --------- coluna de data (prioriza diário) ---------
     possiveis = [date_col, "data", "_dt", "mes_atendimento"]
     dc = next((c for c in possiveis if c in df.columns), None)
 
@@ -768,7 +720,6 @@ def tau_distribuicao_mensal_por_trimestre_barras(
     if id_col not in df.columns:
         raise KeyError(f"Coluna de id '{id_col}' não encontrada.")
 
-    # --------- coluna de tipo ---------
     tc = tipo_col
     if tc not in df.columns:
         for cand in ["tipo_interacao", "interaction_type", "evento", "tipo"]:
@@ -782,13 +733,11 @@ def tau_distribuicao_mensal_por_trimestre_barras(
 
     d = df[[dc, id_col, tc]].copy()
 
-    # --------- normalização mínima ---------
     d[dc] = pd.to_datetime(d[dc], errors="coerce")
     d = d.dropna(subset=[dc])
     d["_date"] = d[dc].dt.normalize()
     d["_quarter"] = d["_date"].dt.to_period("Q")
 
-    # --------- tipos de interação que contam como engajamento ---------
     if not inter_tipos:
         inter_tipos = {
             "mensagem", "mensagens", "msg", "whatsapp",
@@ -807,7 +756,6 @@ def tau_distribuicao_mensal_por_trimestre_barras(
 
     d["_tipo_norm"] = d[tc].map(_norm)
 
-    # --------- primeira interação no trimestre ---------
     d_inter = d[d["_tipo_norm"].isin(inter_tipos)]
     if d_inter.empty:
         fig = go.Figure()
@@ -824,18 +772,15 @@ def tau_distribuicao_mensal_por_trimestre_barras(
         .reset_index(name="first_day")
     )
 
-    # --------- mês dentro do trimestre (1º, 2º, 3º) ---------
     first_inter["_q_start_month"] = first_inter["_quarter"].dt.start_time.dt.month
     first_inter["_month_in_quarter"] = (
         first_inter["first_day"].dt.month - first_inter["_q_start_month"] + 1
     )
 
-    # garante apenas valores 1, 2 ou 3
     first_inter = first_inter[
         first_inter["_month_in_quarter"].isin([1, 2, 3])
     ].copy()
 
-    # --------- contagem e proporção por trimestre x mês ---------
     dist = (
         first_inter
         .groupby(["_quarter", "_month_in_quarter"])[id_col]
@@ -848,7 +793,6 @@ def tau_distribuicao_mensal_por_trimestre_barras(
         fig.update_layout(title="Sem engajados por trimestre.", template="plotly_white", height=320)
         return fig
 
-    # garante todos os meses (1,2,3) para cada trimestre
     quarters = sorted(dist["_quarter"].unique())
     idx = pd.MultiIndex.from_product(
         [quarters, [1, 2, 3]],
@@ -861,23 +805,19 @@ def tau_distribuicao_mensal_por_trimestre_barras(
             .reset_index()
     )
 
-    # proporção dentro do trimestre
     dist["total_q"] = dist.groupby("_quarter")["engajados"].transform("sum")
     dist = dist[dist["total_q"] > 0].copy()
     dist["prop"] = dist["engajados"] / dist["total_q"]
 
-    # labels
     month_labels = {1: "1º mês", 2: "2º mês", 3: "3º mês"}
     quarter_labels = [str(q) for q in quarters]
 
-    # cores harmônicas (degradê de azul)
     color_map = {
-        1: "#1E88E5",  # 1º mês - azul mais forte
-        2: "#64B5F6",  # 2º mês - azul médio
-        3: "#BBDEFB",  # 3º mês - azul claro
+        1: "#1E88E5", 
+        2: "#64B5F6",  
+        3: "#BBDEFB",  
     }
 
-    # --------- figura de barras empilhadas ---------
     fig = go.Figure()
     for m in [1, 2, 3]:
         sub = (
@@ -886,7 +826,6 @@ def tau_distribuicao_mensal_por_trimestre_barras(
             .reindex(quarters, fill_value=0)
         )
 
-        # rótulos: só mostra se tiver pelo menos 8%
         labels = [
             f"{p:.0%}" if p >= 0.08 else ""
             for p in sub["prop"].values
@@ -920,13 +859,16 @@ def tau_distribuicao_mensal_por_trimestre_barras(
 
     return fig
 
+# ------------------------------------------------------------------
+# Heatmap Tipo de Engajamento
+# ------------------------------------------------------------------
 def heatmap_combos_por_trimestre_colscale(
     df: pd.DataFrame,
     *,
     date_col: str,
     id_col: str = "id_pessoa",
     tipo_col: str = "tipo",
-    relative: bool = False,   # escala do rótulo (o mapa de cores continua normalizado por coluna)
+    relative: bool = False,  
     title: str = "Engajamento por combinações de canais por trimestre (pessoas)",
     nenhum_last: bool = True,
 ) -> go.Figure:
@@ -935,7 +877,6 @@ def heatmap_combos_por_trimestre_colscale(
     import pandas as pd
     import plotly.graph_objects as go
 
-    # ---------- colunas mínimas ----------
     if date_col not in df.columns:
         raise KeyError(f"Coluna de data '{date_col}' não encontrada no DataFrame.")
     if id_col not in df.columns:
@@ -991,7 +932,6 @@ def heatmap_combos_por_trimestre_colscale(
     agg["combo"] = agg.apply(make_combo, axis=1)
     base = agg.loc[agg["ativo"] == 1, ["quarter_label", "combo", id_col]].copy()
 
-    # ---------- pivot absoluto (N de pessoas) ----------
     pivot_abs = (base
                  .groupby(["combo", "quarter_label"])[id_col]
                  .nunique()
@@ -1003,11 +943,9 @@ def heatmap_combos_por_trimestre_colscale(
         fig.update_layout(title="Sem dados", template="plotly_white", height=320)
         return fig
 
-    # ---------- matriz relativa (% por trimestre) ----------
     col_sums = pivot_abs.sum(axis=0).replace(0, np.nan)
     pivot_pct = (pivot_abs / col_sums) * 100.0
 
-    # Ordenação pelo último trimestre (pela métrica exibida)
     last_col = pivot_abs.columns[-1]
     ser_last = (pivot_pct if relative else pivot_abs)[last_col].fillna(0)
     if nenhum_last and "nenhum" in ser_last.index:
@@ -1018,16 +956,13 @@ def heatmap_combos_por_trimestre_colscale(
     pivot_abs = pivot_abs.loc[ordered]
     pivot_pct = pivot_pct.loc[ordered]
 
-    # ---------- z (cores) normalizado por COLUNA da métrica escolhida ----------
     to_color = (pivot_pct if relative else pivot_abs).astype(float)
     z_norm = to_color.copy()
     for c in z_norm.columns:
         cmax = z_norm[c].max()
         z_norm[c] = 0.0 if (pd.isna(cmax) or cmax <= 0) else (z_norm[c] / cmax)
 
-    # ---------- rótulos na célula & hover ----------
     if relative:
-        # texto grande = porcentagem (inteiro), hover = % + N
         text_to_show = pivot_pct.values.astype(float)
         texttemplate = "%{text:.0f}%"
         hovertemplate = (
@@ -1036,7 +971,6 @@ def heatmap_combos_por_trimestre_colscale(
             "Pessoas: %{customdata[1]:,d}<extra></extra>"
         )
     else:
-        # texto grande = N, hover = N + %
         text_to_show = pivot_abs.values.astype(float)
         texttemplate = "%{text:.0f}"
         hovertemplate = (
@@ -1045,7 +979,6 @@ def heatmap_combos_por_trimestre_colscale(
             "Percentual: %{customdata[0]:.1f}%<extra></extra>"
         )
 
-    # customdata carrega (pct, abs) para o hover
     customdata = np.dstack([pivot_pct.values, pivot_abs.values]).reshape(pivot_abs.shape[0], pivot_abs.shape[1], 2)
 
     fig = go.Figure(
@@ -1075,22 +1008,22 @@ def heatmap_combos_por_trimestre_colscale(
     return fig
 
 # ------------------------------------------------------------
-# Gráfico: TAU diário acumulado x Meta rateada por dia (cumul.)
+#  TAU diário acumulado x Meta rateada por dia (cumul.)
 # ------------------------------------------------------------
 def meta_trimestral_acumulada(
     df: pd.DataFrame,
     *,
-    date_col: str,                 # coluna de datas (diárias se possível)
-    id_col: str = "id_pessoa",     # identificador da pessoa
-    tipo_col: str = "tipo",        # coluna do tipo de interação
-    inter_tipos: Optional[set] = None,   # quais tipos contam como "engajamento"
-    quarter_label: str,            # "YYYYQX" (aceita também "YYYYQ0X")
-    meta_tau: float,               # meta do trimestre (0–1). Ex: 0.80 (80%)
-    feriados: Optional[Iterable[str]] = None,  # lista opcional de feriados
+    date_col: str,                
+    id_col: str = "id_pessoa",     
+    tipo_col: str = "tipo",        
+    inter_tipos: Optional[set] = None,   
+    quarter_label: str,            
+    meta_tau: float,              
+    feriados: Optional[Iterable[str]] = None,  
     line_real="#1976d2",
     line_meta="#1b5e20",
     title="04 - TAU Realizado Acumulado e 09 - Meta Rateada por Dia Acumulada por date",
-    return_kpis: bool = False      # se True, retorna (fig, kpis)
+    return_kpis: bool = False     
 ):
     import unicodedata, re
 
@@ -1100,7 +1033,6 @@ def meta_trimestral_acumulada(
             "atendimento","consulta","whatsapp","msg","chamada"
         }
 
-    # ---------- escolha da coluna de data (mesma lógica do TAU) ----------
     possiveis = [date_col, "data", "_dt", "mes_atendimento"]
     dc = next((c for c in possiveis if c in df.columns), None)
     if dc is None:
@@ -1108,15 +1040,13 @@ def meta_trimestral_acumulada(
             f"Nenhuma coluna de data encontrada. Recebi date_col='{date_col}'."
         )
 
-    # --- datas e quarter ---
     df = df.copy()
     df[dc] = pd.to_datetime(df[dc], errors="coerce")
     df = df.dropna(subset=[dc])
 
     df["_quarter"] = df[dc].dt.to_period("Q")
-    df["_quarter_lbl"] = df["_quarter"].astype(str)  # "YYYYQ1..4"
+    df["_quarter_lbl"] = df["_quarter"].astype(str)
 
-    # aceita 'YYYYQ01..04' e 'YYYYQ1..4'
     quarter_label_norm = re.sub(r"Q0([1-4])$", r"Q\1", str(quarter_label))
 
     if quarter_label_norm not in set(df["_quarter_lbl"]):
@@ -1128,15 +1058,12 @@ def meta_trimestral_acumulada(
         )
         return (fig, {}) if return_kpis else fig
 
-    # fatia o trimestre
     q_df = df[df["_quarter_lbl"] == quarter_label_norm].copy()
 
-    # datas do tri
     q_period = q_df["_quarter"].iloc[0]
     q_start = q_period.start_time.normalize()
     q_end   = q_period.end_time.normalize()
 
-    # --- denominador (ativos no trimestre) ---
     denom = int(q_df[id_col].nunique())
     if denom <= 0:
         fig = go.Figure()
@@ -1147,7 +1074,6 @@ def meta_trimestral_acumulada(
         )
         return (fig, {}) if return_kpis else fig
 
-    # --- primeiro dia com interação por pessoa (dentro do tri) ---
     def _norm(s):
         s = str(s).strip().lower()
         s = "".join(
@@ -1171,13 +1097,10 @@ def meta_trimestral_acumulada(
         .reset_index()
     )
 
-    # contagem diária de primeiras interações
     counts = first_inter["first_day"].value_counts().sort_index()
-    # eixo diário completo do trimestre
     idx = pd.date_range(q_start, q_end, freq="D")
     cum_real = counts.reindex(idx, fill_value=0).cumsum() / denom
 
-    # --- meta rateada por dia útil ---
     if feriados is None:
         feriados = pd.DatetimeIndex([])
     else:
@@ -1202,7 +1125,6 @@ def meta_trimestral_acumulada(
     meta_cum.loc[dias_uteis] = meta_dia
     meta_cum = meta_cum.cumsum().clip(upper=meta_tau)
 
-    # --- df final para o plot ---
     out = pd.DataFrame({
         "date": idx,
         "realizado_cum": cum_real.values,
@@ -1210,13 +1132,11 @@ def meta_trimestral_acumulada(
     })
     out["gap"] = out["realizado_cum"] - out["meta_cum"]
 
-    # KPIs (no último dia DISPONÍVEL nos dados de engajamento)
     if len(first_inter):
         last_data_day = min(first_inter["first_day"].max(), q_end)
     else:
-        last_data_day = q_start - pd.Timedelta(days=1)  # nenhum engajado
+        last_data_day = q_start - pd.Timedelta(days=1)  
 
-    # engajados até a última data com dado
     if last_data_day < q_start:
         eng_ate_ultima_data = 0
         tau_ate_ultima_data = 0.0
@@ -1224,11 +1144,9 @@ def meta_trimestral_acumulada(
         eng_ate_ultima_data = int((first_inter["first_day"] <= last_data_day).sum())
         tau_ate_ultima_data = eng_ate_ultima_data / denom
 
-    # faltantes pra atingir a meta
     alvo_abs = int(np.ceil(meta_tau * denom))
     faltam_abs = max(0, alvo_abs - eng_ate_ultima_data)
 
-    # dias úteis restantes após a última data com dado
     if last_data_day < q_end:
         d0 = (last_data_day + pd.Timedelta(days=1)).normalize()
         dias_restantes = _dias_uteis(d0, q_end, feriados)
@@ -1238,7 +1156,6 @@ def meta_trimestral_acumulada(
 
     faltam_por_dia = int(np.ceil(faltam_abs / max(1, n_dias_rest))) if faltam_abs > 0 else 0
 
-    # --- Plot ---
     last = out.iloc[-1]
     realizado_final = float(last["realizado_cum"])
     meta_final      = float(last["meta_cum"])
@@ -1304,22 +1221,21 @@ def meta_trimestral_acumulada(
 
     return (fig, kpis) if return_kpis else fig
 
-
 # ------------------------------------------------------------
 # Gráfico Setor
 # ------------------------------------------------------------
 def pie_standard(
     df: pd.DataFrame,
-    names: str,                # coluna categórica
-    values: str,               # coluna numérica
+    names: str,               
+    values: str,              
     title: str = "",
-    hole: float = 0.35,        # 0 = pizza, 0.35 = donut
-    sort: str = "desc",        # 'desc', 'asc', 'none'
-    top_n: int | None = None,  # agrega além dos top_n em "Outros"
+    hole: float = 0.35,        
+    sort: str = "desc",        
+    top_n: int | None = None,  
     others_label: str = "Outros",
     none_label: str = "(não informado)",
     show_legend: bool = True,
-    legend_pos: str = "below_title",  # 'below_title' | 'right' | 'bottom'
+    legend_pos: str = "below_title",  
     percent_digits: int = 1,
     number_digits: int = 0,
     thousands_sep: str = ".",
@@ -1410,17 +1326,16 @@ def pie_standard(
         sort=False,
     )
 
-    # --- legenda logo abaixo do título ---
     if legend_pos == "below_title":
         legend_cfg = dict(
             orientation="h",
             yanchor="top",
-            y=1.0,              # ligeiramente abaixo do título
+            y=1.0,             
             xanchor="right",
             x=0.0,
             valign="top"
         )
-        title_pad = 90          # aumenta o espaço para o título + legenda
+        title_pad = 90         
     elif legend_pos == "bottom":
         legend_cfg = dict(
             orientation="h",
@@ -1453,23 +1368,18 @@ def pie_standard(
 
     return fig
 
-
 # ------------------------------------------------------------
 # Gráfico Histograma e Boxplot
 # ------------------------------------------------------------
 
 def histograma_boxplot_idade_plotly(
     df,
-    # ===== PARÂMETROS ESSENCIAIS (dados) =====
-    col_numerica="col_numerica",        # coluna numérica
-    nbins=20,                            # número de "caixas" (bins) do histograma
+    col_numerica="col_numerica",       
+    nbins=20,                           
+    largura_px=1200,                     
+    altura_px=800,                      
+    margem=dict(l=300, r=140, t=100, b=60), 
 
-    # ===== PARÂMETROS ESSENCIAIS (apresentação — SEMPRE PRESENTES) =====
-    largura_px=1200,                     # largura da figura (px)
-    altura_px=800,                       # altura  da figura (px)
-    margem=dict(l=300, r=140, t=100, b=60),  # margens externas: espaço p/ rótulos/anotações
-
-    # ===== PARÂMETROS ESSENCIAIS (título/saída) =====
     titulo="Distribuição de Idades dos Alunos",
 ):
     """
@@ -1477,15 +1387,6 @@ def histograma_boxplot_idade_plotly(
     Linha 1 (75%): histograma + curva Normal + média/mediana.
     Linha 2 (25%): boxplot horizontal compartilhando o eixo X.
     """
-
-    # ======================================================================
-    # (0) IMPORTS, CORES E SETUP
-    # ======================================================================
-    import numpy as np
-    import pandas as pd
-    from scipy import stats
-    import plotly.graph_objects as go
-    from plotly.subplots import make_subplots
 
     # Paleta
     cor_histograma = "rgb(19, 93, 171)"
@@ -1498,9 +1399,6 @@ def histograma_boxplot_idade_plotly(
     cor_fence      = "rgba(0,0,0,0.35)"
     grid_color     = "rgba(0,0,0,0.08)"
 
-    # ======================================================================
-    # (1) PREPARO DA SÉRIE
-    # ======================================================================
     if col_numerica not in df.columns:
         raise ValueError(f"A coluna '{col_numerica}' não existe no DataFrame.")
 
@@ -1512,9 +1410,6 @@ def histograma_boxplot_idade_plotly(
 
     total = int(len(serie))
 
-    # ======================================================================
-    # (2) ESTATÍSTICAS DESCRITIVAS + OUTLIERS (IQR×1.5)
-    # ======================================================================
     media    = float(np.mean(serie))
     mediana  = float(np.median(serie))
     sd       = float(np.std(serie, ddof=0))
@@ -1529,9 +1424,6 @@ def histograma_boxplot_idade_plotly(
     n_out_low  = int((serie < fence_low).sum())
     n_out_high = int((serie > fence_high).sum())
 
-    # ======================================================================
-    # (3) HISTOGRAMA (BINNING)
-    # ======================================================================
     NBINS = int(max(1, nbins))
     counts, edges = np.histogram(serie, bins=NBINS)
     bin_w = np.diff(edges)
@@ -1547,16 +1439,10 @@ def histograma_boxplot_idade_plotly(
 
     customdata = np.column_stack([bin_l, bin_r, perc / 100.0])
 
-    # ======================================================================
-    # (4) CURVA NORMAL TEÓRICA (ESCALADA)
-    # ======================================================================
     x_vals = np.linspace(serie.min(), serie.max(), 200)
     sd_eff = sd if sd > 0 else 1e-9
     y_vals = stats.norm.pdf(x_vals, loc=media, scale=sd_eff) * total * bin_w.mean()
 
-    # ======================================================================
-    # (5) SUBPLOTS: HISTOGRAMA + BOXPLOT
-    # ======================================================================
     fig = make_subplots(
         rows=2,
         cols=1,
@@ -1565,9 +1451,6 @@ def histograma_boxplot_idade_plotly(
         row_heights=[0.75, 0.25],
     )
 
-    # ======================================================================
-    # (6) HISTOGRAMA
-    # ======================================================================
     fig.add_trace(
         go.Bar(
             x=bin_c,
@@ -1589,9 +1472,6 @@ def histograma_boxplot_idade_plotly(
         col=1,
     )
 
-    # ======================================================================
-    # (7) CURVA NORMAL + MÉDIA/MEDIANA
-    # ======================================================================
     fig.add_trace(
         go.Scatter(
             x=x_vals,
@@ -1633,9 +1513,6 @@ def histograma_boxplot_idade_plotly(
         col=1,
     )
 
-    # ======================================================================
-    # (8) BOXPLOT HORIZONTAL
-    # ======================================================================
     fig.add_trace(
         go.Box(
             x=serie,
@@ -1651,7 +1528,6 @@ def histograma_boxplot_idade_plotly(
         col=1,
     )
 
-    # Linhas média/mediana no boxplot
     fig.add_shape(
         type="line",
         x0=media,
@@ -1673,7 +1549,6 @@ def histograma_boxplot_idade_plotly(
         line=dict(color=cor_mediana, dash="dash", width=2),
     )
 
-    # Fences
     fig.add_shape(
         type="line",
         x0=fence_low,
@@ -1695,9 +1570,6 @@ def histograma_boxplot_idade_plotly(
         line=dict(color=cor_fence, dash="dot"),
     )
 
-    # ======================================================================
-    # (9) LEGENDA EXTRA (fences, outliers, mínimo, máximo)
-    # ======================================================================
     fig.add_trace(
         go.Scatter(
             x=[None],
@@ -1762,9 +1634,6 @@ def histograma_boxplot_idade_plotly(
         col=1,
     )
 
-    # ======================================================================
-    # (10) LAYOUT FINAL
-    # ======================================================================
     fig.update_layout(
         title=dict(
             text=titulo,
@@ -1781,10 +1650,8 @@ def histograma_boxplot_idade_plotly(
         legend=dict(x=0.86, y=0.98, bgcolor="rgba(255,255,255,0.85)"),
     )
 
-    # “Respiro” no topo do histograma
     fig.update_yaxes(range=[0, ymax_hist * 1.25], row=1, col=1)
 
-    # Eixos + grade
     fig.update_yaxes(
         title_text="Número de pessoas",
         showgrid=True,

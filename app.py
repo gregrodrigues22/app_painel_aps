@@ -1,7 +1,7 @@
 # ---------------------------------------------------------------
 # Set up
 # ---------------------------------------------------------------
-import io  # <-- você usa io.BytesIO no leitor de CSV
+import io 
 import re
 import streamlit as st
 import plotly.graph_objects as go
@@ -12,7 +12,6 @@ import json, unicodedata
 import os
 from datetime import datetime
 import pytz
-# Removi imports do BigQuery que não são usados aqui
 import plotly.express as px
 import hashlib
 
@@ -21,9 +20,8 @@ import hashlib
 # ---------------------------------------------------------------
 st.set_page_config(layout="wide", page_title="📊 Public Health Analytics")
 
-# ---------------- Helpers para assets ----------------
 APP_DIR = Path(__file__).resolve().parent
-ASSETS = APP_DIR / "assets"   # <-- antes estava APP_DIR.parent / "assets" (quebrava o caminho)
+ASSETS = APP_DIR / "assets"  
 
 def first_existing(*relative_paths: str) -> Path | None:
     for rel in relative_paths:
@@ -34,7 +32,6 @@ def first_existing(*relative_paths: str) -> Path | None:
 
 LOGO = first_existing("logo.png", "logo.jpg", "logo.jpeg", "logo.webp")
 
-# ---------------- Cabeçalho ----------------
 st.markdown(
     """
     <div style='background: linear-gradient(to right, #004e92, #000428); padding: 40px; border-radius: 12px; margin-bottom:30px'>
@@ -52,19 +49,18 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- helper para evitar crash do st.page_link quando não é multipage ---
 def safe_page_link(path: str, label: str, icon: str | None = None):
     try:
-        # só tenta se o arquivo existir localmente
         if (APP_DIR / path).exists():
             st.page_link(path, label=label, icon=icon)
         else:
             st.button(label, icon=icon, disabled=True, help="Página não disponível neste app.")
     except Exception:
-        # evita KeyError: 'url_pathname' quando não é multipage
         st.button(label, icon=icon, disabled=True, help="Navegação multipage indisponível aqui.")
 
-# ---------------- Sidebar (único) ----------------
+# ---------------------------------------------------------------
+# Sidebar
+# ---------------------------------------------------------------
 with st.sidebar:
     if LOGO:
         st.image(str(LOGO), use_container_width=True)
@@ -73,9 +69,7 @@ with st.sidebar:
     st.markdown("<hr style='border:none;border-top:1px solid #ccc;'/>", unsafe_allow_html=True)
     st.header("Menu")
 
-    # ---- Categorias (estilo TABNET) ----
     with st.expander("Painel Estratégico", expanded=False):
-        # st.page_link(...) causava KeyError fora de multipage; usar safe_page_link
         safe_page_link("pages/relatorio_executivo.py", label="Relatório Executivo", icon="🎯")
 
     with st.expander("Painel Tático", expanded=False):
@@ -112,7 +106,6 @@ def _read_csv_smart(file, force_sep: str | None = None, dtype_map: dict | None =
     dtype_map = dtype_map or {}
     if force_sep:
         return pd.read_csv(file, sep=force_sep, dtype=dtype_map)
-    # tenta detectar separador pela 1ª linha
     head = file.getvalue().splitlines()[0].decode("utf-8", errors="ignore")
     guess = ";" if head.count(";") > head.count(",") else ","
     return pd.read_csv(io.BytesIO(file.getvalue()), sep=guess, dtype=dtype_map)
@@ -142,7 +135,6 @@ Escolha abaixo por onde começar 👇
 """
 )
 
-# ---- componente de card com CTA ----
 def card(title: str, desc: str, icon: str, page_path: str):
     with st.container(border=True):
         st.markdown(f"### {icon} {title}")
@@ -151,16 +143,12 @@ def card(title: str, desc: str, icon: str, page_path: str):
         page_file = (APP_DIR / page_path)
         try:
             if page_file.exists():
-                # OK em modo multipage
                 st.page_link(page_path, label=f"Abrir {title}", icon=icon, help=f"Ir para {title}")
             else:
-                # arquivo não existe
                 st.button(f"Abrir {title}", icon=icon, disabled=True, help="Página não disponível neste app.")
         except Exception:
-            # evita KeyError: 'url_pathname' quando não é multipage
             st.button(f"Abrir {title}", icon=icon, disabled=True, help="Navegação multipage indisponível aqui.")
 
-# ---- layout dos cards ----
 c1, c2, c3 = st.columns(3)
 with c1:
     card(
