@@ -13,6 +13,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import plotly.express as px
 import streamlit as st
+
 from src.plots import (
     bar_yoy_trend,
     fig_ativos_por_mes,
@@ -59,7 +60,6 @@ with st.sidebar:
     st.write(user.get("email", "Desconhecido"))
     st.caption(f"Perfil: {user.get('role', 'user')}")
     logout_button(sidebar=False, label="Sair")
-
 
 # ---------------------------------------------------------------
 # Cabeçalho
@@ -1006,11 +1006,6 @@ with tab2:
 with tab3:
     st.subheader("😭 Desassistência")
 
-    if "df_tau" not in st.session_state:
-        st.warning(
-            "Nenhum dado validado disponível. Vá à aba **Importar & Validar** e carregue o CSV."
-        )
-        st.stop()
     if "df_tau" not in st.session_state:
         st.warning(
             "Nenhum dado validado disponível. Vá à aba **Importar & Validar** e carregue o CSV."
